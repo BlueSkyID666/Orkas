@@ -52,7 +52,12 @@ test.describe('API-key voice input', () => {
         createGain = () => ({ ...node(), gain: { value: 0 } });
         close = async () => {};
       };
-      w.AudioWorkletNode = class { port = { onmessage: null, postMessage() {} }; connect() {} disconnect() {} };
+      w.AudioWorkletNode = class {
+        port = { onmessage: null as any, postMessage: (data: any) => {
+          if (data.flush) queueMicrotask(() => this.port.onmessage?.({ data: { flushed: true } }));
+        } };
+        connect() {} disconnect() {}
+      };
     });
     // Electron's CDP bridge does not intercept WebSockets through Playwright.
     // Use a real loopback peer; only the transport constructor is redirected.

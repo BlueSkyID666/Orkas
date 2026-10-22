@@ -104,6 +104,75 @@ describe('voice input user journey', () => {
     expect(h.button.dataset.voicePhase).toBe('idle');
     expect(h.invoke.mock.calls.map(c => c[0])).not.toContain('groupChat.send');
   });
+  it.each(['success', 'unresponsive', 'cancelled'])(
+    'drains the speech tail or cancels incomplete capture safely: %s', async (scenario) => {
+    vi.useFakeTimers();
+    const h = load();
+    let processor: any, Processor: any, blob: Blob;
+    let mainPort: any;
+    class WorkletProcessor {
+      port = { onmessage: null as any, postMessage: (data: any) => {
+        queueMicrotask(() => mainPort.onmessage?.({ data }));
+      } };
+    }
+    class WorkletNode {
+      port = mainPort = { onmessage: null as any, postMessage: (data: any) => {
+        if (data.flush && scenario !== 'success') return;
+        queueMicrotask(() => processor.port.onmessage?.({ data }));
+      } };
+      constructor() { processor = new Processor(); }
+      connect() {}
+      disconnect() {}
+    }
+    const BaseContext = h.context.window.AudioContext;
+    h.context.window.AudioContext = class extends BaseContext {
+      sampleRate = 16000;
+      audioWorklet = { addModule: async () => {
+        vm.runInNewContext(await blob.text(), {
+          AudioWorkletProcessor: WorkletProcessor,
+          registerProcessor: (_: string, value: any) => { Processor = value; },
+        });
+      } };
+    };
+    h.context.window.AudioWorkletNode = h.context.AudioWorkletNode = WorkletNode;
+    h.context.Blob = Blob;
+    h.context.URL = class extends URL {
+      static createObjectURL(value: Blob) { blob = value; return 'blob:voice-test'; }
+      static revokeObjectURL() {}
+    };
+    await h.button.dispatch('click'); await flush();
+    const socket = h.socket(); socket.open(); await flush();
+    // At 16kHz, this is 200ms of complete packets plus a 40ms speech tail.
+    for (let i = 0; i < 30; i++) {
+      processor.process([[new Float32Array(128).fill(i < 25 ? .25 : -.5)]], [[new Float32Array(128)]]);
+    }
+    await flush();
+    await h.button.dispatch('click'); await flush();
+    expect(h.track.stop).toHaveBeenCalledTimes(1);
+    if (scenario !== 'success') {
+      expect(socket.send.mock.calls.some((call: any[]) => call[0] === '__END__')).toBe(false);
+      if (scenario === 'cancelled') h.context.window.VoiceInput.cancel();
+      await vi.advanceTimersByTimeAsync(500);
+      await flush();
+      expect(socket.send.mock.calls.some((call: any[]) => call[0] === '__END__')).toBe(false);
+      expect(h.button.dataset.voicePhase).toBe('idle');
+      expect(h.input.value).toBe('Draft:');
+      if (scenario === 'unresponsive') {
+        expect(h.context.uiAlert).toHaveBeenCalledWith('chat.mic_incomplete');
+      } else {
+        expect(h.context.uiAlert).not.toHaveBeenCalled();
+      }
+      return;
+    }
+    const sent = socket.send.mock.calls.map((call: any[]) => call[0]);
+    const audio = sent.filter((data: any) => ArrayBuffer.isView(data) && data.byteLength > 0);
+    expect(audio.reduce((n: number, data: any) => n + data.byteLength, 0)).toBe(7680);
+    expect(Array.from(audio.at(-1).slice(-2))).toEqual([0, 192]);
+    expect(sent.filter((value: any) => value === '__END__')).toHaveLength(1);
+    expect(sent.at(-1)).toBe('__END__');
+    socket.result('complete spoken note', true);
+    expect(h.input.value).toBe('Draft: complete spoken note');
+  });
   it('cancels a pending permission request without resurrecting recording', async () => {
     vi.useFakeTimers();
     const h = load(); let grant: any;
@@ -113,6 +182,28 @@ describe('voice input user journey', () => {
     grant({ getTracks: () => [h.track] }); await flush();
     expect(h.track.stop).toHaveBeenCalledTimes(1);
     expect(h.socket()).toBeUndefined();
+    expect(h.button.dataset.voicePhase).toBe('idle');
+  });
+  it('does not resurrect capture when stopped during worklet initialization', async () => {
+    vi.useFakeTimers();
+    const h = load();
+    let ready: () => void = () => {};
+    const BaseContext = h.context.window.AudioContext;
+    h.context.window.AudioContext = class extends BaseContext {
+      audioWorklet = { addModule: () => new Promise<void>((resolve) => { ready = resolve; }) };
+    };
+    h.context.Blob = Blob;
+    const WorkletNode = vi.fn();
+    h.context.window.AudioWorkletNode = h.context.AudioWorkletNode = WorkletNode;
+    await h.button.dispatch('click'); await flush();
+    const socket = h.socket(); socket.open(); await flush();
+    await h.button.dispatch('click'); await flush();
+    ready(); await flush();
+    expect(WorkletNode).not.toHaveBeenCalled();
+    expect(h.track.stop).toHaveBeenCalledTimes(1);
+    expect(h.context.uiAlert).not.toHaveBeenCalled();
+    socket.result('review this note', true);
+    expect(h.input.value).toBe('Draft: review this note');
     expect(h.button.dataset.voicePhase).toBe('idle');
   });
   it('keeps the selected draft untouched when recognition produces no speech', async () => {

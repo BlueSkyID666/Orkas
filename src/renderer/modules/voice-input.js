@@ -37,6 +37,7 @@
       this._connectTimer = null;
       this._finishTimer = null;
       this._closeEmitted = false;
+      this._captureFlush = null;
     }
 
     emit(name, ...args) {
@@ -199,15 +200,22 @@
         if (this._audioCtx.audioWorklet && typeof window.AudioWorkletNode === 'function') {
           let url = '';
           try {
-            const code = `class C extends AudioWorkletProcessor{constructor(){super();this.n=1024;this.b=new Float32Array(this.n);this.i=0;this.port.onmessage=e=>{const d=e.data||{};if(typeof d.n==='number'&&d.n>0){this.n=d.n|0;this.b=new Float32Array(this.n);this.i=0;}};}process(inp,out){const a=inp&&inp[0]&&inp[0][0];const o=out&&out[0]&&out[0][0];if(o){for(let i=0;i<o.length;i++)o[i]=0;}if(!a||a.length===0)return true;for(let i=0;i<a.length;i++){this.b[this.i++]=a[i];if(this.i>=this.n){const c=new Float32Array(this.b);this.port.postMessage({b:c},[c.buffer]);this.i=0;}}return true;}}registerProcessor('orkas-asr-capture',C);`;
+            const code = `class C extends AudioWorkletProcessor{constructor(){super();this.n=1024;this.b=new Float32Array(this.n);this.i=0;this.stopped=false;this.port.onmessage=e=>{const d=e.data||{};if(d.flush){this.stopped=true;if(this.i){const c=this.b.slice(0,this.i);this.port.postMessage({b:c},[c.buffer]);this.i=0;}this.port.postMessage({flushed:true});return;}if(typeof d.n==='number'&&d.n>0){this.n=d.n|0;this.b=new Float32Array(this.n);this.i=0;}};}process(inp,out){if(this.stopped)return false;const a=inp&&inp[0]&&inp[0][0];const o=out&&out[0]&&out[0][0];if(o){for(let i=0;i<o.length;i++)o[i]=0;}if(!a||a.length===0)return true;for(let i=0;i<a.length;i++){this.b[this.i++]=a[i];if(this.i>=this.n){const c=new Float32Array(this.b);this.port.postMessage({b:c},[c.buffer]);this.i=0;}}return true;}}registerProcessor('orkas-asr-capture',C);`;
             const blob = new Blob([code], { type: 'application/javascript' });
             url = URL.createObjectURL(blob);
             this._workletModuleURL = url;
             await this._audioCtx.audioWorklet.addModule(url);
+            if (!this._running) return;
             this._workletNode = new AudioWorkletNode(this._audioCtx, 'orkas-asr-capture', {
               numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
             });
             this._workletNode.port.onmessage = (ev) => {
+              if (ev.data && ev.data.flushed) {
+                const pending = this._captureFlush;
+                this._captureFlush = null;
+                if (pending) { clearTimeout(pending.timer); pending.resolve(true); }
+                return;
+              }
               const buf = ev.data && ev.data.b;
               if (!buf) return;
               const f32 = buf instanceof Float32Array ? buf : new Float32Array(buf);
@@ -252,6 +260,9 @@
     }
 
     teardownCapture() {
+      const pending = this._captureFlush;
+      this._captureFlush = null;
+      if (pending) { clearTimeout(pending.timer); pending.resolve(false); }
       try { if (this._workletNode) this._workletNode.port.onmessage = null; } catch {}
       try { if (this._scriptNode) this._scriptNode.onaudioprocess = null; } catch {}
       try { if (this._workletNode) this._workletNode.disconnect(); } catch {}
@@ -295,20 +306,45 @@
       return u8;
     }
 
-    stop() {
-      this.teardownCapture();
+    async stop() {
+      if (this._pendingClose) return;
       this._running = false;
       this._pendingClose = true;
+      // Release the device immediately, but drain the worklet's partial packet
+      // before __END__. Otherwise up to 200ms of the final spoken word is lost.
+      if (this._mediaStream) {
+        try { this._mediaStream.getTracks().forEach((tr) => { try { tr.stop(); } catch {} }); } catch {}
+        this._mediaStream = null;
+      }
       if (!this._ws) {
+        this.teardownCapture();
         this.emitCloseOnce();
         return;
       }
       this._cancelledBeforeOpen = this._ws.readyState === WebSocket.CONNECTING;
-      try { this.sendAudio(new Uint8Array(0), true); } catch {}
       // Bound finalization without dropping slower terminal responses immediately.
       try {
         this._finishTimer = setTimeout(() => { if (this._pendingClose) { try { this.close(); } catch {} } }, 10_000);
       } catch {}
+      if (this._workletNode) {
+        const flushed = await new Promise((resolve) => {
+          const timer = setTimeout(() => {
+            this._captureFlush = null;
+            resolve(false);
+          }, 500);
+          this._captureFlush = { resolve, timer };
+          try { this._workletNode.port.postMessage({ flush: true }); }
+          catch { clearTimeout(timer); this._captureFlush = null; resolve(false); }
+        });
+        if (!this._ws) return;
+        if (!flushed) {
+          this.emit('onError', Object.assign(new Error(), { code: 'incomplete_transcript' }));
+          this.close();
+          return;
+        }
+      }
+      this.teardownCapture();
+      try { this.sendAudio(new Uint8Array(0), true); } catch {}
     }
 
     close() {
