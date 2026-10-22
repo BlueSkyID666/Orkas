@@ -32,7 +32,9 @@ One task is a good start. Orkas is built for the work that keeps going.
 - **Apps** — describe a tool and Orkas builds it as a local app inside the desktop app. On a paid plan, publish it as a web app with a public link.
 - **Shared projects** — invite a teammate or VA, and give each to-do to a person or an agent.
 
-Cloud sync, shared projects, voice input and web-app publishing are part of the packaged app; most of the rest also works in the source build.
+Cloud sync, shared projects and web-app publishing are part of the packaged app; most of the rest also works in the source build.
+
+Voice input also works in the source build. Configure an **Orkas API Key** in **Settings → Models**, then click the microphone beside a composer. Allow microphone access when prompted. Audio is sent to Orkas for recognition and uses the key owner’s Orkas credits. Click again to stop, review the text, and send it yourself. If access was denied, enable the microphone in your system settings.
 
 ---
 

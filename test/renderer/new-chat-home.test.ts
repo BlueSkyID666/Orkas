@@ -28,13 +28,6 @@ describe('new chat home surface', () => {
     expect(sidebarFooter.match(/<button\b/g)).toHaveLength(1);
   });
 
-  it('keeps voice input filtered from the open-source composer', () => {
-    const html = read('src/renderer/index.html');
-
-    expect(html).not.toContain('id="new-chat-mic-btn"');
-    expect(html).not.toContain('data-ui-icon="mic"');
-  });
-
   it('keeps external CLI onboarding on the AI Team header only', () => {
     const html = read('src/renderer/index.html');
     const state = read('src/renderer/modules/state.js');

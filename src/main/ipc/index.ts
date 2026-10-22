@@ -56,6 +56,7 @@ import * as searchAuth from '../features/search_auth';
 import * as videoAuth from '../features/video_auth';
 import * as videoStudioReview from '../features/video_studio_review';
 import * as ttsAuth from '../features/tts_auth';
+import * as voiceInput from '../features/voice_input';
 import * as permissions from '../features/permissions';
 import * as notificationPermissions from '../features/notification_permissions';
 import * as appConfig from '../features/config';
@@ -3121,6 +3122,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // ── Orkas public API key quick setup (open-source build only) ──
   'orkasApi.configureAll': async ({ apiKey }) => auth.configureAllOrkasApiServices(apiKey),
   'orkasApi.getStatus': async () => auth.getOrkasApiCredentialStatus(),
+  'voice.status': async () => voiceInput.getVoiceStatus(),
+  'voice.createSession': async () => voiceInput.createVoiceSession(),
+  'voice.ensureMicrophoneAccess': async () => voiceInput.ensureMicrophoneAccess(),
   'orkasApi.save': async ({ apiKey }, ctx) => {
     const credential = auth.prepareOrkasApiCredential(apiKey);
     const previousKey = auth.getOrkasApiKey();
@@ -4139,6 +4143,9 @@ export function register(): void {
     const envelope = parseInvokeEnvelope(request);
     if (!envelope) return { ok: false, error: 'invalid ipc request', code: 'E_IPC_REQUEST' };
     const { channel, payload } = envelope;
+    if (channel.startsWith('voice.') && (event.senderFrame !== event.sender.mainFrame || previewWindows.isPreviewContents(event.sender))) {
+      return { ok: false, code: 'E_IPC_SENDER' };
+    }
     if ((channel.startsWith('webApps.') || channel.startsWith('previewWindows.') || channel === 'savedApps.openInApp' || previewWindows.isPreviewContents(event.sender)) && event.senderFrame !== event.sender.mainFrame) return { ok: false, code: 'E_IPC_SENDER' };
     const handler = invokeHandlers[channel];
     if (!handler) return { ok: false, error: `unknown channel: ${channel}` };

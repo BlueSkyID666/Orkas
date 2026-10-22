@@ -307,7 +307,7 @@
       ],
       "icon": "src/resources/icons/icon.icns",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Orkas uses the microphone for websites with your permission.",
+        "NSMicrophoneUsageDescription": "Orkas uses the microphone for voice input and websites with your permission.",
         "NSCameraUsageDescription": "Orkas lets websites use the camera with your permission.",
         "NSBluetoothAlwaysUsageDescription": "Orkas uses Bluetooth to verify that your passkey phone is nearby."
       }
