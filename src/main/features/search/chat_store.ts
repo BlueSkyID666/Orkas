@@ -191,9 +191,16 @@ function openDatabase(dbPath: string): Database.Database {
   // WAL keeps a reader (a search) from blocking behind an append; DELETE mode
   // would serialize them. `synchronous = NORMAL` is the same durability trade
   // vec_store makes for a derived index that reconciles from source.
-  db.pragma('journal_mode = WAL');
-  db.pragma('synchronous = NORMAL');
-  return db;
+  try {
+    db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
+    return db;
+  } catch (err) {
+    // The constructor may succeed before a pragma fails. This handle has
+    // not reached the cache or handleFor's cleanup scope yet.
+    try { db.close(); } catch { /* preserve the initialization error */ }
+    throw err;
+  }
 }
 
 function handleFor(uid: string): Handle {
