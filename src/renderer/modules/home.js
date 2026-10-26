@@ -265,9 +265,27 @@ function _homeTodoRowHtml(task, index) {
     source: pid
       ? t('new_chat.home.source.project_todo', { project: task.project_name || _homeProjectName(pid) })
       : t('new_chat.home.source.global_todo'),
-    details: [_homeTodoStatusLabel(status), updated ? t('new_chat.home.time.updated', { time: updated }) : ''],
+    details: [_homeTodoStatusLabel(status), _homeTodoDueLabel(task), updated ? t('new_chat.home.time.updated', { time: updated }) : ''],
     action: t('new_chat.home.action.view'),
   });
+}
+
+/** "Due Oct 25" or "Overdue since Oct 25" for a dated to-do; empty otherwise. */
+function _homeTodoDueLabel(task) {
+  const dueAt = typeof task.due_at === 'string' ? task.due_at : '';
+  const parts = /^\d{4}-\d{2}-\d{2}$/.test(dueAt) ? dueAt.split('-').map(Number) : null;
+  if (!parts) return '';
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const date = new Date(parts[0], parts[1] - 1, parts[2]);
+  let label = dueAt;
+  try {
+    label = new Intl.DateTimeFormat(_homeLocale(), {
+      month: 'short', day: 'numeric', ...(parts[0] === now.getFullYear() ? {} : { year: 'numeric' }),
+    }).format(date);
+  } catch (_) { /* keep the stored text */ }
+  return t(task.status !== 'done' && dueAt < today ? 'project.todo.due_overdue' : 'project.todo.due_on', { date: label });
 }
 
 function _homeRunRowHtml(run, section, index) {

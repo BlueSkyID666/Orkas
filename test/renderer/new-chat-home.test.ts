@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as vm from 'node:vm';
 
 const root = path.join(__dirname, '../..');
 
@@ -28,11 +29,27 @@ describe('new chat home surface', () => {
     expect(sidebarFooter.match(/<button\b/g)).toHaveLength(1);
   });
 
-  it('keeps voice input filtered from the open-source composer', () => {
+  it('exposes localized voice input through the public ticket API', () => {
     const html = read('src/renderer/index.html');
+    const button = /<button\b[^>]*id="new-chat-mic-btn"[^>]*>[\s\S]*?<\/button>/.exec(html)?.[0];
+    expect(button).toBeTruthy();
+    expect(button).toContain('type="button"');
+    expect(button).toContain('data-i18n-title="chat.mic_title"');
+    expect(button).toContain('data-ui-icon="mic"');
+    expect(html.match(/id="new-chat-mic-btn"/g)).toHaveLength(1);
+    expect(html).toContain('<script src="./modules/voice-input.js"></script>');
+    const preload = read('src/main/preload.js');
+    expect(preload).toContain("createSession: () => invoke('voiceInput.createSession')");
+    expect(preload).toContain("ensureMicrophoneAccess: () => invoke('voiceInput.ensureMicrophoneAccess')");
+  });
 
-    expect(html).not.toContain('id="new-chat-mic-btn"');
-    expect(html).not.toContain('data-ui-icon="mic"');
+  it('hides the microphone when the public ticket capability is unavailable', () => {
+    const button = { dataset: {} as Record<string, string>, style: {} as Record<string, string> };
+    const context: any = { window: { orkas: {} }, document: { addEventListener() {} } };
+    vm.createContext(context);
+    vm.runInContext(read('src/renderer/modules/voice-input.js'), context);
+    context.window.VoiceInput.attach(button, { value: 'Keep this draft' });
+    expect(button.style.display).toBe('none');
   });
 
   it('keeps external CLI onboarding on the AI Team header only', () => {

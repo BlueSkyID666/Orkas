@@ -68,8 +68,6 @@ function loadHome(options: {
     'home-groups': element(),
     'home-explore-context': element(),
   };
-  const clicks: Array<[string, any]> = [];
-  const events: Array<[string, any]> = [];
   const views: any[][] = [];
   const invokes: Array<[string, any]> = [];
   const forgotten: string[] = [];
@@ -96,16 +94,11 @@ function loadHome(options: {
     loadRendererFeature: vi.fn(async () => {}),
     focusTodo: vi.fn(),
     showContextMenu: (_anchor: any, items: any[]) => { menus.push(items); },
-    Monitor: {
-      click: (action: string, data: any) => { clicks.push([action, data]); },
-      event: (action: string, data: any) => { events.push([action, data]); },
-    },
     document: { getElementById: (id: string) => els[id] || null },
   };
   context.window = {
     uiIconHtml,
     innerHeight: 720,
-    Monitor: true,
     addEventListener() {},
     TaskUnread: { list: () => options.unread || [] },
     loadConnectorNavTarget: async (id: string) => ({ name: { feishu: '飞书', dingtalk: '钉钉', gmail: 'Gmail', 'm365-mail': 'Microsoft 365 邮箱' }[id] || id }),
@@ -131,7 +124,7 @@ function loadHome(options: {
     for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setImmediate(resolve));
   };
   return {
-    context, els, clicks, events, views, invokes, forgotten, menus, timers, settle,
+    context, els, views, invokes, forgotten, menus, timers, settle,
     state: () => els['panel-new-chat'].dataset.homeState,
     html: () => els['home-groups'].innerHTML as string,
     data: () => JSON.parse(vm.runInContext('JSON.stringify(_homeData)', context)),
@@ -157,6 +150,32 @@ describe('Commander home states', () => {
     expect(h.els['home-explore-context'].innerHTML).toBe(
       '添加资料或<button type="button" class="home-connect-link" data-home-connect="1">连接邮箱/店铺/办公软件等</button>，让 Orkas 更了解你。从你愿意分享的内容开始。',
     );
+  });
+
+  it('shows a dated to-do\'s day on its row and flags one past its day while it is open', async () => {
+    const pad = (value: number) => String(value).padStart(2, '0');
+    const day = (offset: number) => {
+      const date = new Date();
+      date.setDate(date.getDate() + offset);
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    };
+    const h = loadHome({
+      todos: {
+        total: 3,
+        tasks: [
+          { id: 't_due', project_id: '', project_name: '', status: 'todo', content: '发上线邮件', due_at: day(2) },
+          { id: 't_late', project_id: '', project_name: '', status: 'todo', content: '交周报', due_at: day(-2) },
+          { id: 't_plain', project_id: '', project_name: '', status: 'todo', content: '整理访谈' },
+        ],
+      },
+    });
+    h.context.homeOnEnter();
+    await h.settle();
+    const html = h.html();
+    const metaOf = (title: string) => new RegExp(`${title}</span><span class="home-row-meta"><span class="home-row-source">[^<]*</span>([^<]*)`).exec(html)?.[1] || '';
+    expect(metaOf('发上线邮件')).toMatch(/^[^·]+ · .+ 到期$/);
+    expect(metaOf('交周报')).toMatch(/^[^·]+ · 已逾期（.+）$/);
+    expect(metaOf('整理访谈')).not.toMatch(/到期|逾期/);
   });
 
   it('groups open to-dos, automation runs and other finished tasks in that order', async () => {
@@ -440,7 +459,6 @@ describe('Commander home Connectors link', () => {
 
     h.els['home-explore-context'].fire('click', click({}));
     expect(h.views).toEqual([]);
-    expect(h.clicks).toEqual([]);
     h.els['home-explore-context'].fire('click', click({ '[data-home-connect]': element() }));
     expect(h.views).toEqual([['connectors', null, { entryPoint: 'home' }]]);
     await h.settle();
