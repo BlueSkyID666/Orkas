@@ -22,7 +22,7 @@
     "typecheck:main": "tsc --noEmit",
     "typecheck:core-agent": "tsc --noEmit -p src/core-agent/tsconfig.json",
     "test": "node scripts/run-tests.mjs suite",
-    "test:non-model": "npm run typecheck && npm test && npm run test:e2e:typecheck && npm run test:e2e && npm run test:platform-native && npm run smoke",
+    "test:non-model": "node scripts/run-non-model.mjs",
     "test:js": "node scripts/run-tests.mjs run",
     "test:e2e": "node scripts/run-e2e.cjs test --config playwright.config.ts",
     "test:e2e:debug": "node scripts/run-e2e.cjs test --config playwright.config.ts --debug",

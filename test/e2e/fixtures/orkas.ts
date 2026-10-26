@@ -1835,6 +1835,10 @@ export class OrkasTestApp {
     for (const record of await this.rendererErrorEvidence()) {
       if (record.windowId !== null && windows.has(record.windowId)) this.recoveredRendererErrors.add(record.diagnosticIndex);
     }
+    return this.recoveredDiagnosticRanges();
+  }
+
+  private recoveredDiagnosticRanges() {
     let line = 1;
     const ranges: Array<{ start: number; end: number; diagnosticIndex: number }> = [];
     this.diagnostics.forEach((entry, diagnosticIndex) => {
@@ -1867,6 +1871,17 @@ export class OrkasTestApp {
       failed = true;
     }
 
+    // Export receipts after releasing native/stub ownership. Evidence IO must
+    // fail certification without interrupting resource cleanup.
+    if (process.env.ORKAS_TEST_BATCH_REPORT) {
+      try {
+        await this.testInfo.attach('electron-log-required', { body: Buffer.from(JSON.stringify(this.recoveredDiagnosticRanges())), contentType: 'application/json' });
+      } catch (error) {
+        cleanupError = cleanupError ? new AggregateError([cleanupError, error], 'Fixture cleanup failed') : error;
+        failed = true;
+      }
+    }
+
     const unexpectedApiFailures = this.apiResponses.filter(item => {
       if (item.status < 400) return false;
       const index = this.expectedApiFailures.findIndex(expected => expected.method === item.method
@@ -1876,7 +1891,7 @@ export class OrkasTestApp {
       return false;
     });
     failed ||= unexpectedApiFailures.length > 0 || this.expectedApiFailures.length > 0;
-    if (failed || process.env.ORKAS_E2E_KEEP_LOGS === '1') {
+    if (failed || process.env.ORKAS_E2E_KEEP_LOGS === '1' || process.env.ORKAS_TEST_BATCH_REPORT) {
       mkdirSync(this.testInfo.outputDir, { recursive: true });
       writeFileSync(this.testInfo.outputPath('stub-responses.json'), JSON.stringify(this.apiResponses, null, 2));
     }
@@ -1901,7 +1916,8 @@ export class OrkasTestApp {
         // reporters truncate an inline attachment to a couple of lines, which is
         // exactly the main-process history a failed run needs. `attach({ path })`
         // keeps the full file in the artifacts tree.
-        const logPath = path.join(this.testInfo.outputDir, 'electron-main.log');
+        const logPath = path.join(this.testInfo.outputDir, process.env.ORKAS_TEST_BATCH_REPORT
+          ? `checkpoint-electron-${randomUUID()}.log` : 'electron-main.log');
         try {
           mkdirSync(this.testInfo.outputDir, { recursive: true });
           writeFileSync(logPath, diagnosticText, 'utf8');
@@ -1921,15 +1937,24 @@ export class OrkasTestApp {
       // ORKAS_E2E_KEEP_LOGS=1 preserves the same captured stdout/stderr,
       // renderer diagnostics and app logs as a failed run. File logs alone
       // omit direct console output, including renderer warnings.
-      if (process.env.ORKAS_E2E_KEEP_LOGS === '1') {
+      if (process.env.ORKAS_E2E_KEEP_LOGS === '1' || process.env.ORKAS_TEST_BATCH_REPORT) {
         const appLogs = collectLogFiles(this.root);
         const diagnosticText = [this.diagnostics.join('\n'), appLogs].filter(Boolean).join('\n');
         if (diagnosticText) {
           try {
             mkdirSync(this.testInfo.outputDir, { recursive: true });
             writeFileSync(path.join(this.testInfo.outputDir, 'electron-main.log'), diagnosticText, 'utf8');
-          } catch {
-            // Diagnostics only — never fail a passing test over log capture.
+            if (process.env.ORKAS_TEST_BATCH_REPORT) {
+              const snapshot = this.testInfo.outputPath(`checkpoint-electron-${randomUUID()}.log`);
+              writeFileSync(snapshot, diagnosticText, 'utf8');
+              await this.testInfo.attach('electron-logs', { path: snapshot, contentType: 'text/plain' });
+            }
+          } catch (error) {
+            // Fail reuse after releasing the temporary root and trace files.
+            if (process.env.ORKAS_TEST_BATCH_REPORT) {
+              cleanupError = new Error('Checkpoint Electron log capture failed', { cause: error });
+            }
+            // Ordinary runs preserve their existing diagnostic behavior.
           }
         }
       }
