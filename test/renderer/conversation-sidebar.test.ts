@@ -44,6 +44,10 @@ function createProcessTestElement(tagName = 'div'): any {
       if (index >= 0) parent.children.splice(index, 1);
       this.parentElement = null;
     },
+    contains(child: any) {
+      for (let parent = child; parent; parent = parent.parentElement) if (parent === this) return true;
+      return false;
+    },
     querySelector(selector: string) {
       const className = selector.startsWith('.') ? selector.slice(1) : '';
       for (const child of this.children) {
@@ -3576,6 +3580,21 @@ describe('conversation history reconcile', () => {
     expect(finalizeBody).toContain('_syncRenderedGroupMessageIdentity(ph, gm);');
   });
 
+  it('restores the running bubble header from its real turn start instead of the page reopen time', () => {
+    const context = loadConversationRenderer();
+    context.formatTime = (value: string) => value;
+    const header = { textContent: 'page reopen time' };
+    const startedAt = Date.parse('2026-10-21T12:26:52Z');
+    const row = {
+      dataset: { ts: String(Date.parse('2026-10-21T12:35:00Z')) },
+      parentElement: null,
+      querySelector: (selector: string) => selector === '.chat-msg-time' ? header : null,
+    };
+    context._anchorPlaceholderToTurnStart(row, startedAt);
+    expect(row.dataset.ts).toBe(String(startedAt));
+    expect(header.textContent).toBe('2026-10-21T12:26:52.000Z');
+  });
+
   it('moves a live AI bubble once after newer send-now user activity', () => {
     const context = loadConversationRenderer();
 
@@ -5245,6 +5264,51 @@ describe('conversation process metadata formatting', () => {
     expect(body.children[0]).toBe(group);
     expect(group._processCompactBody.children).toHaveLength(8);
     expect(group._processCompactSummary.innerHTML).toContain('Operations 8');
+  });
+
+  it('restores many tool calls with linear row inspection and updates their original terminal rows', () => {
+    const context = loadConversationRenderer();
+    let inspected = 0;
+    context.document.createElement = (tag: string) => {
+      const node = createProcessTestElement(tag);
+      node.children = new Proxy(node.children, { get(target, key, receiver) {
+        if (typeof key === 'string' && /^\d+$/.test(key)) inspected += 1;
+        return Reflect.get(target, key, receiver);
+      } });
+      return node;
+    };
+    const body = context.document.createElement('div');
+    for (let i = 0; i < 1000; i += 1) context._appendProcessTextLines(body, `Start ${i}`, 'tool', 'bash', `call-${i}`);
+    for (let i = 0; i < 1000; i += 1) context._appendProcessTextLines(body, `Done ${i}`, 'tool', 'bash', `call-${i}`, true);
+    expect(inspected).toBeLessThan(50_000);
+    const rows = body.children[0]._processCompactBody.children;
+    expect(rows).toHaveLength(1000);
+    expect(rows[0].dataset.processText).toBe('Done 0');
+    expect(rows[999].dataset.processTerminal).toBe('1');
+    expect(body.children[0]._processCompactSummary.innerHTML).toContain('Operations 1000');
+  });
+
+  it('keeps mixed narration, expanded groups and lifecycle identity after removal and replay', () => {
+    const context = loadConversationRenderer();
+    context.document.createElement = (tag: string) => createProcessTestElement(tag);
+    const body = createProcessTestElement();
+    context._appendProcessTextLines(body, 'Start A', 'tool', 'bash', 'a');
+    const first = body.children[0];
+    first.open = true;
+    context._appendProcessTextLines(body, 'Start B', 'tool', 'bash', 'b');
+    context._appendProcessCommentaryToBody(body, 'Checking');
+    context._appendProcessTextLines(body, 'Start C', 'tool', 'bash', 'c');
+    context._appendProcessTextLines(body, 'Done A', 'tool', 'bash', 'a', true);
+    context._appendProcessTextLines(body, 'Late progress', 'tool', 'bash', 'a');
+    expect(body.children[0]).toBe(first);
+    expect(first.open).toBe(true);
+    expect(first._processCompactBody.children.map((row: any) => row.dataset.processText)).toEqual(['Done A', 'Start B']);
+    expect(body.children).toHaveLength(3);
+    for (const child of [...body.children]) child.remove();
+    context._appendProcessTextLines(body, 'Replayed A', 'tool', 'bash', 'a', true);
+    expect(body.children).toHaveLength(1);
+    expect(body.children[0]._processCompactBody.children[0].dataset.processText).toBe('Replayed A');
+    expect(body.children[0]._processCompactSummary.innerHTML).toContain('Operations 1');
   });
 
   it('rescans a settled rail without re-reading the row list once per row', () => {
@@ -8030,6 +8094,11 @@ describe('conversation process metadata formatting', () => {
     expect(context._processSummaryRuntimeFromItems([
       { type: 'event', event: { stream: 'runtime', data: { durationMs: 1_234 } } },
     ])).toBe('1s');
+    const estimated = { stream: 'runtime', data: {
+      phase: 'interrupted', duration_ms: 36_831_876, duration_estimated: true,
+    } };
+    expect(context._processSummaryRuntimeFromItems([{ type: 'event', event: estimated }])).toBe('≈ 10h 13m 52s');
+    expect(context._formatEventLine(estimated)).toBe('Total time ≈ 10h 13m 52s');
     expect(context._processSummaryRuntimeFromItems([
       {
         type: 'event',

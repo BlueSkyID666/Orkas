@@ -434,8 +434,8 @@ export async function renameAgentInMembers(
 
 // ── State IO ─────────────────────────────────────────────────────────────
 
-export async function readState(uid: string, cid: string, projectIdHint?: string | null): Promise<StateFile> {
-  const cloud = await readCloudState(uid, cid, projectIdHint);
+export async function readState(uid: string, cid: string, projectIdHint?: string | null, opts?: { strict?: boolean }): Promise<StateFile> {
+  const cloud = await readCloudState(uid, cid, projectIdHint, opts);
   return { ...cloudConversationState(cloud),
     ...readCodingDirectoryFromStateFile(uid, cid, conversationLayout(uid, cid, projectIdHint).stateFile),
   };
@@ -445,13 +445,17 @@ async function readCloudState(
   uid: string,
   cid: string,
   projectIdHint?: string | null,
+  opts?: { strict?: boolean },
 ): Promise<StateFile> {
   const file = conversationLayout(uid, cid, projectIdHint).stateFile;
-  if (!fs.existsSync(file)) {
+  if (!opts?.strict && !fs.existsSync(file)) {
     return { version: 1, status: 'idle', last_active_at: nowIso(), in_flight: [], active_recipient_choice_revision: 0 };
   }
   try {
-    const data: any = await readJson(file);
+    const data: any = await readJson(file, opts);
+    if (opts?.strict && (!data || typeof data !== 'object' || Array.isArray(data))) {
+      throw new Error('Conversation state is invalid');
+    }
     if (data && typeof data === 'object') {
       const orchestrationLedger = _sanitizeOrchestrationLedger(data.orchestration_ledger);
       const recipients = Array.isArray(data.active_recipients)
@@ -518,6 +522,10 @@ async function readCloudState(
       };
     }
   } catch (err) {
+    if (opts?.strict) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      return { version: 1, status: 'idle', last_active_at: nowIso(), in_flight: [], active_recipient_choice_revision: 0 };
+    }
     log.warn(`read state failed user=${uid} cid=${cid}: ${(err as Error).message}`);
   }
   return { version: 1, status: 'idle', last_active_at: nowIso(), in_flight: [], active_recipient_choice_revision: 0 };
