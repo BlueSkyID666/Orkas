@@ -1596,7 +1596,7 @@ function _renderAgentDetailMemory(agent, editing = false) {
 function _agentMemoryFailureText(res, fallback) {
   const error = String((res && res.error) || '');
   if (/^memory full/i.test(error)) return t('memory.error_full');
-  return error || fallback;
+  return fallback;
 }
 
 async function _agentMemoryAdd(agent, text) {
@@ -1620,6 +1620,27 @@ async function _agentMemoryRemove(agent, text) {
   return window.orkas.invoke('agents.memory.remove', { agent_id: agent.agent_id, old_text: text });
 }
 
+async function _applyAgentMemoryChange(agent, write) {
+  let res;
+  try {
+    res = await write();
+  } catch (_) {
+    uiAlert(t('memory.error_generic'));
+    return false;
+  }
+  if (!res || res.ok === false) {
+    uiAlert(_agentMemoryFailureText(res, t('memory.error_generic')));
+    return false;
+  }
+  try {
+    await loadAgents(true);
+    await _refreshAgentDetail(agent.agent_id);
+  } catch (_) {
+    _agentsLog.warn('agent memory refresh failed', { error_code: 'refresh_failed' });
+  }
+  return true;
+}
+
 function _wireAgentMemoryControls(host, agent) {
   host.querySelectorAll('[data-agent-memory-add]').forEach((btn) => {
     btn.addEventListener('click', async (e) => {
@@ -1630,17 +1651,7 @@ function _wireAgentMemoryControls(host, agent) {
         : window.prompt(label, '');
       const text = (content || '').trim();
       if (!text) return;
-      try {
-        const res = await _agentMemoryAdd(agent, text);
-        if (!res || res.ok === false) {
-          uiAlert(_agentMemoryFailureText(res, _agentLabel('agents.memory_update_failed', '记忆更新失败', 'Memory update failed', 'メモリ更新に失敗しました')));
-          return;
-        }
-        await loadAgents(true);
-        await _refreshAgentDetail(agent.agent_id);
-      } catch (err) {
-        uiAlert((err && err.message) || _agentLabel('agents.memory_update_failed', '记忆更新失败', 'Memory update failed', 'メモリ更新に失敗しました'));
-      }
+      await _applyAgentMemoryChange(agent, () => _agentMemoryAdd(agent, text));
     });
   });
   host.querySelectorAll('[data-agent-memory-edit]').forEach((btn) => {
@@ -1654,17 +1665,7 @@ function _wireAgentMemoryControls(host, agent) {
         : window.prompt(label, oldText);
       const text = (content || '').trim();
       if (!text || text === oldText) return;
-      try {
-        const res = await _agentMemoryUpdate(agent, oldText, text);
-        if (!res || res.ok === false) {
-          uiAlert(_agentMemoryFailureText(res, _agentLabel('agents.memory_update_failed', '记忆更新失败', 'Memory update failed', 'メモリ更新に失敗しました')));
-          return;
-        }
-        await loadAgents(true);
-        await _refreshAgentDetail(agent.agent_id);
-      } catch (err) {
-        uiAlert((err && err.message) || _agentLabel('agents.memory_update_failed', '记忆更新失败', 'Memory update failed', 'メモリ更新に失敗しました'));
-      }
+      await _applyAgentMemoryChange(agent, () => _agentMemoryUpdate(agent, oldText, text));
     });
   });
   host.querySelectorAll('[data-agent-memory-remove]').forEach((btn) => {
@@ -1681,17 +1682,7 @@ function _wireAgentMemoryControls(host, agent) {
           })
         : false;
       if (!ok) return;
-      try {
-        const res = await _agentMemoryRemove(agent, text);
-        if (!res || res.ok === false) {
-          uiAlert(_agentMemoryFailureText(res, _agentLabel('agents.memory_update_failed', '记忆更新失败', 'Memory update failed', 'メモリ更新に失敗しました')));
-          return;
-        }
-        await loadAgents(true);
-        await _refreshAgentDetail(agent.agent_id);
-      } catch (err) {
-        uiAlert((err && err.message) || _agentLabel('agents.memory_update_failed', '记忆更新失败', 'Memory update failed', 'メモリ更新に失敗しました'));
-      }
+      await _applyAgentMemoryChange(agent, () => _agentMemoryRemove(agent, text));
     });
   });
 }
@@ -1926,7 +1917,6 @@ function _renderAgentOutputFormatSection(agent, editing = false) {
     if (trigger) { trigger.setAttribute('disabled', ''); trigger.style.pointerEvents = 'none'; trigger.style.opacity = '0.6'; }
   }
 }
-
 
 /** Render the runtime control in the detail body.
  *
@@ -2671,7 +2661,6 @@ function _renderAgentEnabledButton(agent) {
     finally { btn.disabled = false; }
   });
 }
-
 
 function _toggleAgentFieldEditable(on) {
   const nameEl = document.getElementById('agents-detail-name');
@@ -4828,5 +4817,7 @@ window.addEventListener('local-cli-upgraded', async (event) => {
     void _renderAgentDetailRuntime(agent);
     void _renderAgentDetailCliSettings(agent, { refresh: true });
     void renderCliAccountUsage(agent, { force: true });
-  } catch (_) { /* next detail entry revalidates independently */ }
+  } catch (_) {
+    _agentsLog.warn('CLI account details refresh unavailable');
+  }
 });
