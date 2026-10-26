@@ -27,7 +27,7 @@ const fixtures: {
     id: string,
     name: string,
     args: Record<string, unknown>,
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; conversationId?: string },
   ) => Promise<unknown>;
 } = {
   instances: [],
@@ -50,7 +50,7 @@ vi.mock('../../../../src/main/features/connectors/manager', () => ({
   },
   refreshStaleToolCaches: async () => 0,
   addCustomInstance: (uid: string, input: unknown) => fixtures.addCustomInstance(uid, input),
-  callTool: (uid: string, id: string, name: string, args: Record<string, unknown>, opts?: { signal?: AbortSignal }) =>
+  callTool: (uid: string, id: string, name: string, args: Record<string, unknown>, opts?: { signal?: AbortSignal; conversationId?: string }) =>
     fixtures.callTool(uid, id, name, args, opts),
 }));
 
@@ -1409,11 +1409,13 @@ describe('call_connector_tool', () => {
     expect(result.isError).toBe(true);
   });
 
-  it('passes the task AbortSignal to manager and classifies cancellation separately', async () => {
+  it('passes host conversation context and the task AbortSignal to manager and classifies cancellation separately', async () => {
     fixtures.instances = [makeInstance({ id: 'notion', tools: NOTION_TOOLS })];
     let receivedSignal: AbortSignal | undefined;
+    let receivedConversation: string | undefined;
     fixtures.callTool = async (_uid, _id, _name, _args, opts) => {
       receivedSignal = opts?.signal;
+      receivedConversation = opts?.conversationId;
       throw Object.assign(new Error('connector tool call cancelled'), {
         name: 'AbortError',
         code: 'E_TOOL_CALL_CANCELLED',
@@ -1421,13 +1423,14 @@ describe('call_connector_tool', () => {
     };
     const controller = new AbortController();
     const { createConnectorMetaTools } = await loadModule();
-    const [, call] = await createConnectorMetaTools({ userId: UID });
+    const [, call] = await createConnectorMetaTools({ userId: UID, cid: 'download-conversation' });
 
     const result = await runTool(call, {
       connector_id: 'notion', tool_name: 'search', args: { query: 'x' },
     }, controller.signal);
 
     expect(receivedSignal).toBe(controller.signal);
+    expect(receivedConversation).toBe('download-conversation');
     expect(result.isError).toBe(true);
   });
 

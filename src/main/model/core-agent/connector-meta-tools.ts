@@ -428,7 +428,7 @@ function createCallConnectorToolTool(opts: ConnectorMetaToolsOpts): AgentTool {
             );
           }
         }
-        const raw = await manager.callTool(opts.userId, cid, toolName, normalizedArgs, { signal: ctx.signal });
+        const raw = await manager.callTool(opts.userId, cid, toolName, normalizedArgs, { signal: ctx.signal, conversationId: opts.cid });
         if (!ctx.signal?.aborted) observeTaskDraftResult(draftScope, toolName, normalizedArgs, raw);
         const content = stringifyMcpResult(raw);
         const protocolError = !!raw && typeof raw === 'object' && (raw as { isError?: unknown }).isError === true;

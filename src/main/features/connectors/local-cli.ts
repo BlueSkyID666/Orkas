@@ -221,6 +221,9 @@ function localCliEnv(uid: string, entry: CatalogEntry): Record<string, string> {
   fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(workDir, { recursive: true, mode: 0o700 });
   return withBackgroundNodeEnv({
+    // npm lifecycle scripts and Windows command shims invoke bare `node`.
+    // Keep their runtime aligned with the explicitly selected helper runtime.
+    PATH: [path.dirname(runtime.executable), buildSandboxEnv(undefined).PATH].join(path.delimiter),
     ORKAS_LOCAL_CLI_PROVIDER: config.provider,
     ORKAS_LOCAL_CLI_BRAND: config.brand || '',
     ORKAS_LOCAL_CLI_PACKAGE: `${config.package_name}@${config.package_version}`,
