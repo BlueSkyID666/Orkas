@@ -1,4 +1,6 @@
 import { composerAccessorSource } from './composer-test-source';
+const attachOrderSource = ts.createSourceFile('conversation.js', fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation.js'), 'utf8'), ts.ScriptTarget.Latest, true);
+const attachmentOrderFunction = attachOrderSource.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === '_chatAttachOrderItems')!.getText(attachOrderSource);
 import { conversationCacheSource } from './conversation-cache-test-source';
 import { describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -196,7 +198,7 @@ describe('project to-do controls', () => {
       window: { addEventListener() {} }, t: (key: string) => key, escapeHtml: String,
       setTimeout, clearTimeout,
     });
-    vm.runInContext(composerAccessorSource, context);
+    vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context);
     const task = { id: 't_one', content: 'Review', status: stage };
     const status = (card: any) => cardNodes(card).find((child: any) => child.dataset.action === 'todo-status');
@@ -257,7 +259,7 @@ describe('project to-do controls', () => {
       t: (key: string) => key,
       setTimeout, clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context);
     context._openTodoRowMenu({}, 't_123456789abc', {
       pid: 'p_test', tasks: [{ id: 't_123456789abc', title: 'Continue work', status }],
@@ -325,7 +327,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
 
     const card = context._renderTodoCard(task, { pid: 'p_test', tasks: [task], agents: [] });
@@ -419,7 +421,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test'; _bindProjectTodos();", context);
     await context._loadProjectTodos('p_test');
@@ -538,7 +540,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext(
       "_projectDetailPid = 'p_test';"
@@ -659,7 +661,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test'; _bindProjectTodos();", context);
     await context._loadProjectTodos('p_test');
@@ -741,7 +743,7 @@ describe('project to-do controls', () => {
       uiAlert() {},
       setTimeout, clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test';", context);
 
@@ -823,7 +825,7 @@ describe('project to-do controls', () => {
       uiAlert() {},
       setTimeout, clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test'; _bindProjectTodos();", context);
     context._openProjectTodoEditor();
@@ -860,7 +862,7 @@ describe('project to-do controls', () => {
       uiIconHtml: () => '<svg></svg>',
       setTimeout, clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test';", context);
 
@@ -918,7 +920,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test'; _bindProjectDriver();", context);
 
@@ -1036,7 +1038,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
 
     // A background driver advance pushes its new conversation; it lands in the
@@ -1079,7 +1081,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test'; _projectDetailMeta = { project: {} };", context);
 
@@ -1127,7 +1129,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test'", context);
 
@@ -1187,7 +1189,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test'", context);
 
@@ -1252,7 +1254,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test'", context);
 
@@ -1329,7 +1331,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test'", context);
 
@@ -1406,7 +1408,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test'", context);
 
@@ -1479,7 +1481,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test'", context);
 
@@ -1525,7 +1527,7 @@ describe('project to-do controls', () => {
       setTimeout,
       clearTimeout,
     });
-  vm.runInContext(composerAccessorSource, context);
+  vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context, { filename: 'project-detail.js' });
     vm.runInContext("_projectDetailPid = 'p_test'", context);
 
@@ -1553,7 +1555,7 @@ describe('todo attachment preview recovery', () => {
       openChatFileViewer: (...args: any[]) => opened.push(args),
       uiAlert: (message: string) => alerts.push(message), t: (key: string) => key,
     });
-    vm.runInContext(composerAccessorSource, context);
+    vm.runInContext(composerAccessorSource + attachmentOrderFunction, context);
     vm.runInContext(source, context);
     await context._previewTodoAttachment('p_other', 't_123456abcdef', 'brief.txt');
     expect(opened).toEqual([]);

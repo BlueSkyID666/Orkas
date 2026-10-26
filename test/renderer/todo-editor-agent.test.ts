@@ -78,7 +78,7 @@ describe('todo editor assignment', () => {
     h.elements['project-todo-input'].value = 'New';
     await h.context._saveProjectTodoEditor();
     const patch = h.calls.find((c) => c.channel === 'projects.tasks.update').args;
-    expect(patch).toEqual({ projectId: '', taskId: 't_aabbccddeeff', content: 'New' });
+    expect(patch).toEqual({ projectId: '', taskId: 't_aabbccddeeff', content: 'New', attachment_order: [] });
   });
 
   it('discards stale agent responses when the project changes and never carries an owner across scopes', async () => {

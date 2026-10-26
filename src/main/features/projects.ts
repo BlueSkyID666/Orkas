@@ -114,7 +114,7 @@ async function withProjectInstructionsMutationLock<T>(
 export interface Project {
   project_id: string;
   name: string;
-  /** Current account uid for private projects; Server owner uid for shared projects, or empty if unknown. */
+  /** Local user id that owns this project. */
   owner_uid: string;
   created_at: string;
   updated_at: string;
@@ -284,7 +284,6 @@ async function _writeProject(uid: string, p: Project): Promise<void> {
   fs.mkdirSync(projectDir(uid, p.project_id), { recursive: true });
   await writeJson(projectMetaFile(uid, p.project_id), p);
   _invalidateSearchDisplayCatalog(uid);
-  _notifyDirty();
 }
 
 function _invalidateSearchDisplayCatalog(uid: string): void {
@@ -305,32 +304,18 @@ function _normaliseBindings(raw: any): ProjectBindings {
 
 async function _readBindings(uid: string, pid: string): Promise<ProjectBindings> {
   const f = projectBindingsFile(uid, pid);
-  if (!fs.existsSync(f)) return { agents: [] };
   try {
-    const raw: any = await readJson(f);
+    const raw: any = await readJson(f, { strict: true });
     return _normaliseBindings(raw);
   } catch (err) {
-    log.warn('read bindings failed', { pid: maskId(pid), error: logErrorSummary(err) });
-    return { agents: [] };
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return { agents: [] };
+    throw new Error('Project Agent bindings unavailable');
   }
 }
 
 async function _writeBindings(uid: string, pid: string, b: ProjectBindings): Promise<void> {
   fs.mkdirSync(projectDir(uid, pid), { recursive: true });
   await writeJson(projectBindingsFile(uid, pid), b);
-  _notifyDirty();
-}
-
-// Sync engine dirty signal (lazy-require — `features/sync` is stripped from the open-source build). Mirrors
-// the pattern in `agents.ts::_invalidateAgentListCache`: any write to a `cloud/projects/...`
-// file should kick the sync debounce so the change propagates within seconds rather than the
-// 5-min periodic.
-function _notifyDirty(): void {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
-    const sync = null as { markDirty?: (domain: string, relPath: string) => void };
-    sync?.markDirty?.('projects', 'cloud/projects');
-  } catch { /* features/sync stripped */ }
 }
 
 // ── Validation ────────────────────────────────────────────────────────────
@@ -375,8 +360,8 @@ export async function listProjects(uid: string): Promise<ProjectWithStats[]> {
     convCount: conversationCounts.get(project.project_id) || 0,
   } : null);
   const projects = entries.filter((entry): entry is { project: Project; convCount: number } => entry !== null);
-  // Shared projects lead; display-name order within each group is shared by
-  // the sidebar and every picker backed by `projects.list`.
+  // Display-name order is shared by the sidebar and every picker backed by
+  // `projects.list`.
   // Numeric comparison keeps names such as Project 2 before
   // Project 10; project_id is a deterministic fallback for malformed legacy
   // data that collates to the same display name.
@@ -389,14 +374,20 @@ export async function listProjects(uid: string): Promise<ProjectWithStats[]> {
   return projects.map(({ project, convCount }) => ({ ...project, conv_count: convCount }));
 }
 
-/** Project names only, for chips/search catalogs that do not need counts. */
-export async function listProjectNameRows(uid: string): Promise<Array<{ project_id: string; name: string }>> {
+/** Project names only, for chips/search catalogs and per-turn listings that
+ *  do not need conversation counts. */
+export async function listProjectNameRows(
+  uid: string,
+): Promise<Array<{ project_id: string; name: string }>> {
   const ids = await _listProjectIds(uid);
   if (!ids.length) return [];
   const rows = await _mapBounded(ids, 8, (pid) => _readProject(uid, pid));
   return rows
     .filter((project): project is Project => project !== null)
-    .map((project) => ({ project_id: project.project_id, name: project.name || '' }));
+    .map((project) => ({
+      project_id: project.project_id,
+      name: project.name || '',
+    }));
 }
 
 /** Resolve a single project by id (no stats). */
@@ -456,15 +447,18 @@ export async function renameProject(
   });
 }
 
+/** User-initiated rename shared by the desktop and Commander. */
+export async function renameProjectForUser(uid: string, projectId: string, name: string) {
+  return renameProject(uid, projectId, name);
+}
+
 // ── Project instructions (ORKAS.md) ─────────────────────────────────────────
 //
 // A per-project markdown file: the project's standing goal + rules, injected
 // into the system prompt of every session that belongs to the project
 // (runner.ts). The USER edits it in the project settings UI; the COMMANDER may
 // and named project actors can replace it via `project_instructions` using
-// the conditional writer. Same sync posture as the
-// sibling project files (projects domain, no explicit markDirty — matches
-// `_writeProject`).
+// the conditional writer.
 
 export const PROJECT_INSTRUCTIONS_CHAR_LIMIT = 4000;
 
@@ -498,6 +492,22 @@ export async function readProjectInstructions(
   return { ok: true, content, limit: PROJECT_INSTRUCTIONS_CHAR_LIMIT };
 }
 
+// Local, in-process change notification for ORKAS.md. index.ts wires it to a
+// renderer broadcast so an open project's rules rail refreshes when a model
+// writes the instructions mid-conversation (project_setup, project_instructions),
+// not only when the page is reopened. The renderer's own save already knows.
+export interface InstructionsChangedEvent { uid: string; projectId: string }
+type InstructionsChangedListener = (e: InstructionsChangedEvent) => void;
+const _instructionsChangedListeners: InstructionsChangedListener[] = [];
+export function onProjectInstructionsChanged(cb: InstructionsChangedListener): void {
+  if (typeof cb === 'function') _instructionsChangedListeners.push(cb);
+}
+function _notifyInstructionsChanged(uid: string, projectId: string): void {
+  for (const cb of _instructionsChangedListeners) {
+    try { cb({ uid, projectId }); } catch { /* a listener must never undo a saved write */ }
+  }
+}
+
 export async function writeProjectInstructions(
   uid: string,
   projectId: string,
@@ -508,6 +518,7 @@ export async function writeProjectInstructions(
     const cur = await _readProject(uid, projectId);
     if (!cur) return { ok: false, error: 'not_found' };
     writeTextAtomicSync(projectInstructionsFile(uid, projectId), content);
+    _notifyInstructionsChanged(uid, projectId);
     log.info('instructions saved', { uid: maskId(uid), pid: projectId, chars: content.length });
     return { ok: true };
   });
@@ -548,6 +559,7 @@ export async function writeProjectInstructionsIfUnchanged(
     if (currentContent !== expectedContent) return { ok: false, error: 'conflict' };
 
     writeTextAtomicSync(projectInstructionsFile(uid, projectId), content);
+    _notifyInstructionsChanged(uid, projectId);
     log.info('instructions conditionally saved', { uid: maskId(uid), pid: projectId, chars: content.length });
     return { ok: true };
   });
@@ -576,7 +588,6 @@ export function formatProjectInstructionsForSystemPrompt(uid: string, projectId:
     content,
   ].join('\n\n');
 }
-
 
 /** Cascade-delete: every conversation under this project is dropped (full
  *  per-conv cascade — `<cid>.jsonl` / sessions / attachments / search idx /

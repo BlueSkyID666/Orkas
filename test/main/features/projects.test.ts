@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { drainMainRuntimeForTest } from '../../helpers/drain-main-runtime';
@@ -688,8 +689,7 @@ describe('projects › instructions', () => {
     const expectedOrder = [
       '1. The current user request',
       '2. Project instructions',
-      '3. Latest project status',
-      "4. This project's memory",
+      "3. This project's memory",
     ];
     let last = -1;
     for (const line of expectedOrder) {
@@ -697,6 +697,9 @@ describe('projects › instructions', () => {
       expect(index).toBeGreaterThan(last);
       last = index;
     }
+    // No host source ever produced a "project status" tier; the open-work
+    // snapshot is turn-ephemeral host facts, not a precedence level.
+    expect(block).not.toContain('Latest project status');
     expect(block).toContain('tell the user which values conflict and where each came from');
     expect(block).toContain('standing defaults, not immutable higher-authority policy');
     expect(block).toContain('one-turn exception without changing the saved project instructions');
