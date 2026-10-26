@@ -52,6 +52,57 @@ async function setDeepSeekEnabled(enabled: boolean): Promise<void> {
   }, `"deepseek-${enabled ? 'on' : 'off'}"`);
 }
 
+async function writeExpiredOAuthEntry({
+  providerId,
+  model,
+  uid = TEST_UID,
+  expires = Date.now() - 1000,
+  access = 'expired-access-token',
+  refresh = 'expired-refresh-token',
+}: {
+  providerId: string;
+  model: string;
+  uid?: string;
+  expires?: number;
+  access?: string;
+  refresh?: string;
+}): Promise<void> {
+  const paths = await import('../../../src/main/paths');
+  const localSecrets = await import('../../../src/main/util/local-secret-store');
+  const file = paths.userAuthProfilesFile(uid);
+  const ctx = { namespace: 'auth.profiles', ownerId: uid, recordId: 'auth-profiles.json' };
+  const profileId = `${providerId}:default`;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, localSecrets.encryptLocalSecret(ctx, JSON.stringify({
+    version: 4,
+    profiles: {
+      [profileId]: {
+        type: 'oauth',
+        provider: providerId,
+        label: 'default',
+        access,
+        refresh,
+        expires,
+        createdAt: 1,
+        lastUsed: 0,
+        accountId: 'acct-test',
+      },
+    },
+    entries: [{
+      entryId: `entry-${providerId}`,
+      provider: providerId,
+      model,
+      profileId,
+      createdAt: 1,
+      lastUsed: 0,
+    }],
+    searchProfiles: [],
+    imageProfiles: [],
+    videoProfiles: [],
+    ttsProfiles: [],
+  })), 'utf8');
+}
+
 describe('auth › maskKey', () => {
   it('returns empty for non-string inputs', async () => {
     const a = await import('../../../src/main/features/auth');
@@ -628,6 +679,45 @@ describe('auth › custom model configuration', () => {
     ]);
   });
 
+  it.each([
+    ['contextWindow', [131_072]], ['contextWindow', { value: 131_072 }],
+    ['maxTokens', true], ['maxTokens', []], ['maxTokens', [32_768]],
+  ])('rejects non-scalar %s sizing without overwriting an existing credential (%#)', async (field, invalid) => {
+    const auth = await import('../../../src/main/features/auth');
+    const config = { label: 'typed-sizing', model: 'fixture-model',
+      baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic',
+      contextWindow: 131_072, maxTokens: 32_768 };
+    await expect(auth.addCustomModelEntry({ ...config, [field]: invalid } as any))
+      .rejects.toMatchObject({ code: 'CUSTOM_TOKEN_LIMIT_INVALID' });
+    expect((await auth.listEntries({ includeUnavailable: true })).entries).toHaveLength(0);
+    const saved = await auth.addCustomModelEntry(config);
+    const before = await auth.pickChatEntryGroup();
+    await expect(auth.addCustomModelEntry({ ...config, [field]: invalid } as any))
+      .rejects.toMatchObject({ code: 'CUSTOM_TOKEN_LIMIT_INVALID' });
+    expect(await auth.pickChatEntryGroup()).toEqual(before);
+    expect((await auth.listEntries({ includeUnavailable: true })).entries).toHaveLength(1);
+    expect((await auth.pickChatEntryGroup())[0]?.entryId).toBe(saved.entryId);
+    await auth.addCustomModelEntry({ ...config, contextWindow: '131072', maxTokens: '65536' });
+    expect((await auth.pickChatEntryGroup())[0]?.customConfig).toMatchObject({
+      contextWindow: 131_072, maxTokens: 65_536,
+    });
+  });
+
+  it.each([1, 131_072, 16_777_216])('retains a valid output boundary %s without clamping', async maxTokens => {
+    const auth = await import('../../../src/main/features/auth');
+    await auth.addCustomModelEntry({ label: 'sizing-boundary', model: 'fixture-model',
+      baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic', contextWindow: 16_777_216, maxTokens });
+    expect((await auth.pickChatEntryGroup())[0]?.customConfig?.maxTokens).toBe(maxTokens);
+  });
+
+  it.each([0, -1, 1.5, 16_777_217])('rejects invalid output boundary %s before saving a credential', async maxTokens => {
+    const auth = await import('../../../src/main/features/auth');
+    await expect(auth.addCustomModelEntry({ label: 'sizing-boundary', model: 'fixture-model',
+      baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic', contextWindow: 16_777_216, maxTokens }))
+      .rejects.toMatchObject({ code: 'CUSTOM_TOKEN_LIMIT_INVALID' });
+    expect((await auth.listEntries({ includeUnavailable: true })).entries).toHaveLength(0);
+  });
+
   it('rejects API keys that cannot be sent in an Authorization header without a partial credential', async () => {
     const a = await import('../../../src/main/features/auth');
 
@@ -1090,6 +1180,7 @@ describe('auth › hasConfiguredModel', () => {
 });
 
 describe('auth › listModels', () => {
+
   it('returns the hand-curated list for a known provider', async () => {
     const a = await import('../../../src/main/features/auth');
     const { models } = await a.listModels('anthropic');
@@ -1551,4 +1642,385 @@ describe('auth › durable shared profile contracts', () => {
       ]);
   });
 
+});
+
+
+describe('auth › user-owned configuration operations', () => {
+  it.each(['addApiKeyEntry', 'addEntry', 'updateEntryModel', 'reorderEntries', 'selectEntry', 'selectVersion'].flatMap(operation =>
+    ['different-account', 'anonymous', ...(['updateEntryModel', 'reorderEntries', 'selectEntry', 'selectVersion'].includes(operation) ? ['credential-added', 'credential-removed'] : [])].map(destination => [operation, destination]),
+  ))('does not publish %s after its metadata wait crosses into %s', async (operation, destination) => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let entered = false;
+    vi.doMock('#core-agent', async importOriginal => {
+      entered = true; await gate;
+      return importOriginal();
+    });
+    const auth = await import('../../../src/main/features/auth');
+    const users = await import('../../../src/main/features/users');
+    const paths = await import('../../../src/main/paths');
+    const secrets = await import('../../../src/main/util/local-secret-store');
+    const other = destination === 'anonymous' ? users.ANONYMOUS_LOCAL_ID : 'auth-owner-b';
+    const files = [TEST_UID, other].map(uid => paths.userAuthProfilesFile(uid));
+    for (const uid of [TEST_UID, other]) {
+      users.activateUser(uid);
+      await auth.addApiKey('openai', `synthetic-${uid}-key`, 'owner');
+      const file = paths.userAuthProfilesFile(uid);
+      const context = { namespace: 'auth.profiles', ownerId: uid, recordId: 'auth-profiles.json' };
+      const store = JSON.parse(secrets.decryptLocalSecret(context, fs.readFileSync(file, 'utf8')));
+      store.entries = ['gpt-5.6-sol', 'gpt-5.6-terra'].map((model, index) => ({
+        entryId: `entry-${index}`, provider: 'openai', model, profileId: 'openai:owner', createdAt: 1, lastUsed: 0,
+      }));
+      fs.writeFileSync(file, secrets.encryptLocalSecret(context, JSON.stringify(store)));
+    }
+    users.activateUser(TEST_UID);
+    const before = files.map(file => fs.readFileSync(file, 'utf8'));
+    const run = () => {
+      if (operation === 'addApiKeyEntry') return auth.addApiKeyEntry('openai', 'gpt-5.6-sol', 'synthetic-new-key', 'new');
+      if (operation === 'addEntry') return auth.addEntry({ provider: 'openai', model: 'gpt-6-sol', profileId: 'openai:owner' });
+      if (operation === 'updateEntryModel') return auth.updateEntryModel('entry-0', 'gpt-6-sol');
+      if (operation === 'reorderEntries') return auth.reorderEntries(['entry-1', 'entry-0']);
+      return auth.selectEntry('entry-1', operation === 'selectVersion' ? 'gpt-6-sol' : undefined);
+    };
+    const pending = run().then(() => 'saved', () => 'rejected');
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true));
+      if (destination === 'credential-added') await auth.addApiKey('anthropic', 'synthetic-newer-key', 'newer');
+      else if (destination === 'credential-removed') await auth.removeCredential('openai:owner');
+      else users.activateUser(other);
+      const expected = destination.startsWith('credential-') ? files.map(file => fs.readFileSync(file, 'utf8')) : before;
+      release();
+      const outcome = await pending;
+      expect({ outcome, stores: files.map(file => fs.readFileSync(file, 'utf8')) })
+        .toEqual({ outcome: 'rejected', stores: expected });
+      if (destination === 'credential-removed') return;
+      // A fresh explicit operation in the original account remains usable.
+      users.activateUser(TEST_UID);
+      await run();
+      expect(fs.readFileSync(files[1], 'utf8')).toBe(before[1]);
+      expect(fs.readFileSync(files[0], 'utf8')).not.toBe(before[0]);
+    } finally {
+      release(); await pending;
+    }
+  });
+});
+
+describe('auth › OAuth login ownership and cancellation', () => {
+  async function prepareLogin() {
+    let release!: (credentials: any) => void;
+    let reject!: (error: Error) => void;
+    const gate = new Promise<any>((resolve, fail) => { release = resolve; reject = fail; });
+    let callbacks: any;
+    const login = vi.fn((value: any) => { callbacks = value; return gate; });
+    const provider = { id: 'anthropic', name: 'Anthropic', login, refreshToken: vi.fn(), getApiKey: (value: any) => value.access };
+    const lookup = vi.fn(() => provider);
+    vi.doMock('@earendil-works/pi-ai/oauth', () => ({
+      getOAuthProvider: lookup, getOAuthProviders: () => [provider], registerOAuthProvider: vi.fn(),
+    }));
+    const auth = await import('../../../src/main/features/auth');
+    const users = await import('../../../src/main/features/users');
+    const paths = await import('../../../src/main/paths');
+    const secrets = await import('../../../src/main/util/local-secret-store');
+    const other = 'oauth-login-owner-b';
+    for (const uid of [TEST_UID, other]) {
+      users.activateUser(uid); await auth.addApiKey('openai', `synthetic-${uid}-key`, 'owner');
+    }
+    users.activateUser(TEST_UID);
+    const files = [TEST_UID, other].map(uid => paths.userAuthProfilesFile(uid));
+    const before = files.map(file => fs.readFileSync(file, 'utf8'));
+    const credentials = { access: 'synthetic-login-access', refresh: 'synthetic-login-refresh', expires: Date.now() + 3_600_000 };
+    return { auth, users, secrets, other, files, before, credentials, release, reject, login, lookup, provider, get callbacks() { return callbacks; } };
+  }
+
+  it.each(['success', 'account-switch', 'cancelled-success', 'cancelled-failure'])('preserves credential stores and terminal ownership for %s', async scenario => {
+    const fixture = await prepareLogin();
+    const { auth, users, other, files, before, credentials } = fixture;
+    const { flowId } = await auth.startOAuth('anthropic', 'login');
+    try {
+      if (scenario === 'account-switch') users.activateUser(other);
+      if (scenario.startsWith('cancelled')) {
+        vi.useFakeTimers();
+        expect(auth.cancelOAuthFlow(flowId)).toEqual({ ok: true });
+        expect(fixture.callbacks.signal.aborted).toBe(true);
+      }
+      if (scenario === 'cancelled-failure') fixture.reject(new Error('synthetic provider failure'));
+      else fixture.release(credentials);
+      await new Promise<void>(resolve => queueMicrotask(resolve));
+      await new Promise<void>(resolve => queueMicrotask(resolve));
+      const status = auth.pollOAuthFlow(flowId).status;
+      if (scenario === 'success') {
+        expect(status).toMatchObject({ kind: 'done', profileId: 'anthropic:login' });
+        const saved = JSON.parse(fixture.secrets.decryptLocalSecret({
+          namespace: 'auth.profiles', ownerId: TEST_UID, recordId: 'auth-profiles.json',
+        }, fs.readFileSync(files[0], 'utf8')));
+        expect(saved.profiles['anthropic:login']).toMatchObject(credentials);
+        expect(fs.readFileSync(files[1], 'utf8')).toBe(before[1]);
+      } else {
+        expect({ stores: files.map(file => fs.readFileSync(file, 'utf8')), kind: status.kind })
+          .toEqual({ stores: before, kind: 'error' });
+        if (scenario.startsWith('cancelled')) expect(status).toEqual({ kind: 'error', error: 'cancelled' });
+      }
+    } finally {
+      fixture.release(credentials);
+      await new Promise<void>(resolve => queueMicrotask(resolve));
+      vi.clearAllTimers(); vi.useRealTimers();
+    }
+  });
+
+  it('does not let a different account read, submit to or cancel an existing login', async () => {
+    const fixture = await prepareLogin();
+    const { auth, users, credentials } = fixture;
+    const { flowId } = await auth.startOAuth('anthropic', 'login');
+    const answer = fixture.callbacks.onPrompt({ message: 'synthetic owner-only prompt' });
+    try {
+      users.activateUser(fixture.other);
+      const poll = auth.pollOAuthFlow(flowId).status;
+      const submit = auth.submitOAuthInput(flowId, 'foreign-input');
+      const cancel = auth.cancelOAuthFlow(flowId);
+      expect({ kind: poll.kind, submit, cancel, aborted: fixture.callbacks.signal.aborted })
+        .toEqual({ kind: 'error', submit: { ok: false }, cancel: { ok: false }, aborted: false });
+      expect(JSON.stringify(poll)).not.toContain('synthetic owner-only prompt');
+      users.activateUser(TEST_UID);
+      expect(auth.submitOAuthInput(flowId, 'owner-input')).toEqual({ ok: true });
+      expect(await answer).toBe('owner-input');
+      fixture.release(credentials);
+      await vi.waitFor(() => expect(auth.pollOAuthFlow(flowId).status.kind).toBe('done'));
+    } finally {
+      users.activateUser(TEST_UID); vi.useFakeTimers();
+      auth.cancelOAuthFlow(flowId); fixture.release(credentials);
+      await answer;
+      await new Promise<void>(resolve => queueMicrotask(resolve));
+      vi.clearAllTimers(); vi.useRealTimers();
+    }
+  });
+
+
+  it.each(['http-response', 'exchange-details', 'invalid-json'])('keeps raw %s provider failures out of the OAuth status and diagnostics', async shape => {
+    const fixture = await prepareLogin();
+    const secret = 'synthetic-oauth-private-marker';
+    const body = JSON.stringify({ access_token: secret, email: 'fixture-person@example.test', request_path: '/Users/test/private/login' });
+    const detail = `HTTP request failed. status=401; url=https://provider.example.test/token?code=${secret}; body=${body}`;
+    // Accepted error formats from the pinned Anthropic OAuth SDK. Its body
+    // may contain arbitrary remote data, so exposing a sanitized substring
+    // does not establish the authorization-failure UI contract.
+    const message = shape === 'http-response' ? detail : shape === 'invalid-json'
+      ? `Token exchange returned invalid JSON. url=https://provider.example.test/token; body=${body}; details=SyntaxError`
+      : `Token exchange request failed. url=https://provider.example.test/token; redirect_uri=http://localhost:1455/callback?code=${secret}; response_type=authorization_code; details=${detail}`;
+    const { flowId } = await fixture.auth.startOAuth('anthropic', 'login');
+    try {
+      fixture.reject(new Error(message));
+      await vi.waitFor(() => expect(fixture.auth.pollOAuthFlow(flowId).status.kind).toBe('error'));
+      const status = fixture.auth.pollOAuthFlow(flowId).status as { kind: string; error?: string };
+      expect(status.error).toBeFalsy(); // Renderer must use its existing localized failure copy.
+      const published = JSON.stringify({ status, warnings: loggerMocks.warn.mock.calls });
+      for (const value of [secret, 'fixture-person@example.test', '/Users/test/private/login', 'provider.example.test', body]) {
+        expect(published).not.toContain(value);
+      }
+      expect(fixture.files.map(file => fs.readFileSync(file, 'utf8'))).toEqual(fixture.before);
+    } finally {
+      vi.useFakeTimers(); fixture.auth.cancelOAuthFlow(flowId); fixture.release(fixture.credentials);
+      await Promise.resolve(); vi.clearAllTimers(); vi.useRealTimers();
+    }
+  });
+
+  it('does not start a provider login when account ownership changes during provider discovery', async () => {
+    const fixture = await prepareLogin();
+    let entered = false;
+    let releaseLookup!: () => void;
+    const gate = new Promise<void>(resolve => { releaseLookup = resolve; });
+    fixture.lookup.mockImplementation((async () => { entered = true; await gate; return fixture.provider; }) as any);
+    const pending = fixture.auth.startOAuth('anthropic', 'login').then(() => 'started', () => 'rejected');
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true));
+      fixture.users.activateUser(fixture.other);
+      releaseLookup(); fixture.release(fixture.credentials);
+      const result = await pending;
+      await new Promise<void>(resolve => queueMicrotask(resolve));
+      expect({ result, calls: fixture.login.mock.calls.length, stores: fixture.files.map(file => fs.readFileSync(file, 'utf8')) })
+        .toEqual({ result: 'rejected', calls: 0, stores: fixture.before });
+    } finally {
+      releaseLookup(); fixture.release(fixture.credentials); await pending;
+    }
+  });
+});
+
+
+describe('auth › interrupted connection and rotation ownership', () => {
+  const probes = ['metadata', 'refresh', 'discovery', 'factory', 'stream'].flatMap(stage => ['explicit', 'rotation'].flatMap(mode =>
+    ['same-account', 'different-account', 'anonymous'].map(destination => [stage, mode, destination]),
+  ));
+  probes.push(...['same-account', 'different-account', 'anonymous'].map(destination => ['refresh', 'rotation-key', destination]));
+  it.each(probes)('keeps %s %s work within its initiating account after %s', async (stage, mode, destination) => {
+    let entered = false;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    vi.doMock('#core-agent', async importOriginal => {
+      if (stage === 'metadata') { entered = true; await gate; }
+      if (stage === 'refresh') return { ...await importOriginal<any>(), createPiProvider: (config: unknown) => { factory(config); return { stream, complete }; } };
+      return {};
+    });
+    const providerId = stage === 'refresh' ? 'openai-codex' : 'custom';
+    const modelId = stage === 'refresh' ? 'gpt-5.6-sol' : 'controlled-probe';
+    const profileId = `${providerId}:${stage === 'refresh' ? 'default' : 'probe'}`;
+    const credentials = { access: 'synthetic-rotated-access', refresh: 'synthetic-rotated-refresh', expires: Date.now() + 3_600_000 };
+    const refresh = vi.fn(async () => { entered = true; await gate; return credentials; });
+    const oauthProvider = { id: providerId, name: 'Controlled OAuth fixture', login: vi.fn(), refreshToken: refresh, getApiKey: (c: any) => c.access };
+    vi.doMock('@earendil-works/pi-ai/oauth', () => ({
+      getOAuthProvider: (id: string) => id === providerId ? oauthProvider : undefined,
+      getOAuthProviders: () => [oauthProvider], registerOAuthProvider: vi.fn(),
+    }));
+    const stream = vi.fn(() => (async function* () { if (stage === 'stream') { entered = true; await gate; } yield { type: 'text_delta', text: 'OK' }; })());
+    const complete = async () => {
+      for await (const _event of stream()) { /* Complete consumes the public provider stream. */ }
+      return { content: [{ type: 'text', text: 'OK' }], model: modelId, stopReason: 'end_turn' };
+    };
+    const factory = vi.fn(async (_config: unknown) => {
+      if (stage === 'factory') { entered = true; await gate; }
+      return { stream, complete };
+    });
+    vi.doMock('../../../src/main/model/core-agent/external-providers', async () => {
+      if (stage === 'discovery') { entered = true; await gate; }
+      return { createCustomOpenAICompatibleProvider: factory };
+    });
+    const auth = await import('../../../src/main/features/auth');
+    const users = await import('../../../src/main/features/users');
+    const paths = await import('../../../src/main/paths');
+    const secrets = await import('../../../src/main/util/local-secret-store');
+    const other = destination === 'anonymous' ? users.ANONYMOUS_LOCAL_ID : 'probe-owner-b';
+    const read = (uid: string) => JSON.parse(secrets.decryptLocalSecret({ namespace: 'auth.profiles', ownerId: uid, recordId: 'auth-profiles.json' }, fs.readFileSync(paths.userAuthProfilesFile(uid), 'utf8')));
+    for (const uid of [TEST_UID, other]) {
+      users.activateUser(uid);
+      if (stage === 'refresh') await writeExpiredOAuthEntry({ providerId, model: modelId, uid });
+      else await auth.addCustomModelEntry({ label: 'probe', baseUrl: 'https://gateway.example.test/v1', model: modelId, apiKey: `synthetic-${uid}-key` });
+    }
+    users.activateUser(TEST_UID);
+    const otherBefore = fs.readFileSync(paths.userAuthProfilesFile(other), 'utf8');
+    const pending = mode === 'rotation-key' ? auth.pickRotationKey(providerId)
+      : auth.testConnection(providerId, modelId, mode === 'explicit' ? profileId : undefined);
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true));
+      if (destination !== 'same-account') users.activateUser(other);
+      const cooldown = await import('../../../src/main/model/core-agent/profile-cooldown');
+      if (stage === 'stream') cooldown.markCooldown(profileId, 'auth', 'fixture newly active account cooldown');
+      release();
+      const result = await pending;
+      if (stage === 'stream') {
+        // The already-started probe may finish, but its old result must not
+        // clear an independently established cooldown in the new account.
+        expect(result).toMatchObject({ ok: true, profileId });
+        expect(stream).toHaveBeenCalledTimes(1);
+        expect(cooldown.isCooledDown(profileId)).toBe(destination !== 'same-account');
+        expect(fs.readFileSync(paths.userAuthProfilesFile(other), 'utf8')).toBe(otherBefore);
+      } else if (destination === 'same-account') {
+        if (mode === 'rotation-key') expect(result).toMatchObject({ apiKey: credentials.access, profileId });
+        else {
+          expect(result).toMatchObject({ ok: true, profileId });
+          expect(stream).toHaveBeenCalledTimes(1);
+          expect(factory).toHaveBeenCalledWith(expect.objectContaining({ apiKey: stage === 'refresh' ? credentials.access : `synthetic-${TEST_UID}-key` }));
+        }
+      } else {
+        // No stale key may escape and no provider request may start after a
+        // boundary was crossed. The other encrypted store must stay exact.
+        expect({ result: mode === 'rotation-key' ? result : (result as any)?.ok,
+          streamCalls: stream.mock.calls.length,
+          otherBytes: fs.readFileSync(paths.userAuthProfilesFile(other), 'utf8') })
+          .toEqual({ result: mode === 'rotation-key' ? null : false, streamCalls: 0, otherBytes: otherBefore });
+        if (stage === 'metadata' || stage === 'discovery') expect(factory).not.toHaveBeenCalled();
+      }
+      if (stage === 'refresh') {
+        expect(refresh).toHaveBeenCalledTimes(1);
+        // A rotating refresh already admitted still persists to its owner.
+        expect(read(TEST_UID).profiles[profileId]).toMatchObject(credentials);
+      }
+    } finally {
+      release(); await pending;
+      vi.doUnmock('../../../src/main/model/core-agent/external-providers');
+    }
+  });
+});
+
+describe('auth › chat picker operation ownership', () => {
+  it.each(['api_key', 'oauth'] as const)('does not resolve %s credentials after model discovery crosses into another account', async kind => {
+    let release!: () => void;
+    let entered = false;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    vi.doMock('#core-agent', async original => { entered = true; await gate; return original(); });
+    const providerId = kind === 'oauth' ? 'openai-codex' : 'openai';
+    const model = 'gpt-5.6-sol';
+    const refresh = vi.fn(async () => ({ access: 'synthetic-refreshed-a', refresh: 'synthetic-next-a', expires: Date.now() + 3_600_000 }));
+    const oauthProvider = { id: providerId, name: 'Controlled OAuth fixture', refreshToken: refresh, getApiKey: (c: any) => c.access };
+    vi.doMock('@earendil-works/pi-ai/oauth', () => ({
+      getOAuthProvider: () => oauthProvider, getOAuthProviders: () => [oauthProvider], registerOAuthProvider: vi.fn(),
+    }));
+    const auth = await import('../../../src/main/features/auth');
+    const users = await import('../../../src/main/features/users');
+    const paths = await import('../../../src/main/paths');
+    const secrets = await import('../../../src/main/util/local-secret-store');
+    const other = 'chat-picker-owner-b';
+    for (const uid of [TEST_UID, other]) {
+      users.activateUser(uid);
+      if (kind === 'oauth') await writeExpiredOAuthEntry({ providerId, model, uid, access: `synthetic-${uid}-old`, refresh: `synthetic-${uid}-refresh` });
+      else {
+        const saved = await auth.addApiKey(providerId, `synthetic-${uid}-key`, 'default');
+        const file = paths.userAuthProfilesFile(uid);
+        const context = { namespace: 'auth.profiles', ownerId: uid, recordId: 'auth-profiles.json' };
+        const store = JSON.parse(secrets.decryptLocalSecret(context, fs.readFileSync(file, 'utf8')));
+        store.entries = [{ entryId: 'entry-picker', provider: providerId, model, profileId: saved.profileId, createdAt: 1, lastUsed: 0 }];
+        fs.writeFileSync(file, secrets.encryptLocalSecret(context, JSON.stringify(store)));
+      }
+    }
+    users.activateUser(TEST_UID);
+    const otherBefore = fs.readFileSync(paths.userAuthProfilesFile(other), 'utf8');
+    const pending = auth.pickChatEntryGroup();
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true));
+      users.activateUser(other);
+      release();
+      const choices = await pending;
+      expect({ choices, refreshCalls: refresh.mock.calls.length, otherBytes: fs.readFileSync(paths.userAuthProfilesFile(other), 'utf8') })
+        .toEqual({ choices: [], refreshCalls: 0, otherBytes: otherBefore });
+      // Returning to the originating account admits a fresh explicit lookup.
+      users.activateUser(TEST_UID);
+      expect((await auth.pickChatEntryGroup())[0]).toMatchObject({ provider: providerId, apiKey: kind === 'oauth' ? 'synthetic-refreshed-a' : `synthetic-${TEST_UID}-key` });
+      if (kind === 'oauth') expect(refresh).toHaveBeenCalledWith(expect.objectContaining({ access: `synthetic-${TEST_UID}-old` }));
+      expect(fs.readFileSync(paths.userAuthProfilesFile(other), 'utf8')).toBe(otherBefore);
+    } finally { release(); await pending; }
+  });
+
+  it.each(['success', 'failure'] as const)('settles an admitted OAuth refresh %s without returning a stale choice or changing the new account failure state', async outcome => {
+    let release!: () => void;
+    let entered = false;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const other = 'chat-picker-refresh-b';
+    const credentials = { access: 'synthetic-refreshed-a', refresh: 'synthetic-next-a', expires: Date.now() + 3_600_000 };
+    const refresh = vi.fn(async (old: any) => {
+      if (old.access === 'synthetic-b-old') throw new Error('synthetic B refresh failure');
+      entered = true; await gate;
+      if (outcome === 'failure') throw new Error('synthetic A refresh failure');
+      return credentials;
+    });
+    const provider = { id: 'openai-codex', name: 'Controlled OAuth fixture', refreshToken: refresh, getApiKey: (c: any) => c.access };
+    vi.doMock('@earendil-works/pi-ai/oauth', () => ({ getOAuthProvider: () => provider, getOAuthProviders: () => [provider], registerOAuthProvider: vi.fn() }));
+    const auth = await import('../../../src/main/features/auth');
+    const users = await import('../../../src/main/features/users');
+    const paths = await import('../../../src/main/paths');
+    const secrets = await import('../../../src/main/util/local-secret-store');
+    for (const uid of [TEST_UID, other]) await writeExpiredOAuthEntry({ providerId: provider.id, model: 'gpt-5.6-sol', uid, access: uid === other ? 'synthetic-b-old' : 'synthetic-a-old' });
+    users.activateUser(other);
+    if (outcome === 'success') expect(await auth.pickRotationKey(provider.id)).toBeNull();
+    const otherFailure = auth.getConfiguredModelOAuthExpiredMessage();
+    expect(Boolean(otherFailure)).toBe(outcome === 'success');
+    const otherBefore = fs.readFileSync(paths.userAuthProfilesFile(other), 'utf8');
+    users.activateUser(TEST_UID);
+    const pending = auth.pickChatEntryGroup();
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true));
+      users.activateUser(other); release();
+      expect(await pending).toEqual([]);
+      expect(auth.getConfiguredModelOAuthExpiredMessage()).toBe(otherFailure);
+      expect(fs.readFileSync(paths.userAuthProfilesFile(other), 'utf8')).toBe(otherBefore);
+      const original = JSON.parse(secrets.decryptLocalSecret({ namespace: 'auth.profiles', ownerId: TEST_UID, recordId: 'auth-profiles.json' }, fs.readFileSync(paths.userAuthProfilesFile(TEST_UID), 'utf8')));
+      expect(original.profiles['openai-codex:default'].access).toBe(outcome === 'success' ? credentials.access : 'synthetic-a-old');
+    } finally { release(); await pending; }
+  });
 });

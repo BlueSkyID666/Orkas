@@ -66,7 +66,7 @@ import { userAuthProfilesFile, userLocalConfigDir } from '../paths';
 import * as localSecrets from '../util/local-secret-store';
 import { isBearerTokenHeaderSafe } from '../util/http-authorization';
 import { safeExternalUserActionUrl } from '../util/window-security';
-import { getActiveUserId } from './users';
+import { getActiveUserId, hasActiveUser } from './users';
 import {
   FEATURED_API_PROVIDERS,
   OAUTH_PROVIDERS,
@@ -385,12 +385,12 @@ function decryptProfilesPayload(raw: string, localId: string): { json: string; n
   throw new Error('auth-profiles decrypt failed');
 }
 
-function loadProfiles(opts: { throwOnInvalidExisting?: boolean } = {}): ProfilesFile {
+function loadProfiles(opts: { throwOnInvalidExisting?: boolean; userId?: string } = {}): ProfilesFile {
+  const uid = opts.userId ?? getActiveUserId();
   try {
-    const raw = fs.readFileSync(profilesFile(), 'utf-8');
+    const raw = fs.readFileSync(userAuthProfilesFile(uid), 'utf-8');
     // Decrypt current Hosted/Open fallback payloads, or the previous crypto-vault whole-file
     // format. Plain JSON is also accepted as a one-shot migration input.
-    const uid = getActiveUserId();
     const { json, needsRewrite } = decryptProfilesPayload(raw, uid);
     let shouldRewrite = needsRewrite;
     const data = JSON.parse(json) as Partial<ProfilesFile>;
@@ -490,7 +490,7 @@ function loadProfiles(opts: { throwOnInvalidExisting?: boolean } = {}): Profiles
         ...(orkasApiCredential ? { orkasApiCredential } : {}),
       };
       if (shouldRewrite || Number((data as any).version) !== PROFILES_FILE_VERSION) {
-        try { saveProfiles(store); }
+        try { saveProfiles(store, uid); }
         catch (err) {
           // Migration is best-effort: a valid parsed store remains usable when disk writes fail.
           log.warn('auth profiles migration rewrite failed; using parsed store', { error: logErrorSummary(err) });
@@ -884,8 +884,8 @@ export function removeOrkasApiCredential(): { removed: boolean } {
   return { removed };
 }
 
-function saveProfiles(store: ProfilesFile): void {
-  const localId = getActiveUserId();
+function saveProfiles(store: ProfilesFile, userId?: string): void {
+  const localId = userId ?? getActiveUserId();
   const target = userAuthProfilesFile(localId);
   const targetDir = path.dirname(target);
   const tmp = `${target}.tmp`;
@@ -1044,7 +1044,7 @@ function normalizeCustomTokenLimit(
   field: 'contextWindow' | 'maxTokens',
 ): number {
   if (raw === undefined || raw === null || raw === '') return fallback;
-  const value = Number(raw);
+  const value = typeof raw === 'number' || typeof raw === 'string' ? Number(raw) : NaN;
   const minimum = field === 'contextWindow' ? 1_024 : 1;
   if (!Number.isInteger(value) || value < minimum || value > MAX_CUSTOM_TOKEN_LIMIT) {
     throw customConfigError(
@@ -1397,6 +1397,7 @@ export async function addApiKeyEntry(
   apiKey: string,
   label?: string,
 ): Promise<{ profileId: string; entryId: string }> {
+  const userId = getActiveUserId();
   const id = String(providerId || '').trim();
   const model = resolveModelUpgrade(id, String(modelId || '').trim()).modelId;
   const key = String(apiKey || '').trim();
@@ -1408,8 +1409,9 @@ export async function addApiKeyEntry(
     throw customConfigError('CUSTOM_CONFIG_REQUIRED', 'Use the custom model configuration flow');
   }
   await assertRuntimeSelectableModel(id, model);
+  assertActiveAuthOwner(userId);
 
-  const store = loadProfiles({ throwOnInvalidExisting: true });
+  const store = loadProfiles({ throwOnInvalidExisting: true, userId });
   const chosenLabel = label ? sanitizeLabel(label) : autoLabel(store, id);
   const profileId = makeProfileId(id, chosenLabel);
   const now = Date.now();
@@ -1437,7 +1439,7 @@ export async function addApiKeyEntry(
       createdAt: now,
     });
   }
-  saveProfiles(store);
+  saveProfiles(store, userId);
   clearCooldown(profileId);
   invalidateCoreAgentRunner();
   return { profileId, entryId };
@@ -1484,7 +1486,7 @@ export async function addCustomModelEntry(
   );
   const hasExplicitMaxTokens = input.maxTokens !== undefined
     && input.maxTokens !== null
-    && String(input.maxTokens).trim() !== '';
+    && !(typeof input.maxTokens === 'string' && input.maxTokens.trim() === '');
   const maxTokens = hasExplicitMaxTokens
     ? normalizeCustomTokenLimit(input.maxTokens, DEFAULT_CUSTOM_MAX_TOKENS, 'maxTokens')
     : undefined;
@@ -1701,13 +1703,15 @@ export async function addEntry({
   model,
   profileId,
 }: { provider: string; model: string; profileId: string }): Promise<{ entryId: string }> {
+  const userId = getActiveUserId();
   const p = String(provider || '').trim();
   const m = resolveModelUpgrade(p, String(model || '').trim()).modelId;
   const pid = String(profileId || '').trim();
   if (!p || !m || !pid) throw new Error('provider / model / profileId required');
   assertModelProviderAllowed(p, m);
   await assertRuntimeSelectableModel(p, m);
-  const store = loadProfiles({ throwOnInvalidExisting: true });
+  assertActiveAuthOwner(userId);
+  const store = loadProfiles({ throwOnInvalidExisting: true, userId });
   if (!store.profiles[pid]) throw new Error('profile not found');
   if (store.profiles[pid].provider !== p) throw new Error('profile does not belong to provider');
 
@@ -1727,16 +1731,18 @@ export async function addEntry({
     lastUsed: 0,
     createdAt: now,
   });
-  saveProfiles(store);
+  saveProfiles(store, userId);
   invalidateCoreAgentRunner();
   return { entryId };
 }
 
 export async function updateEntryModel(entryId: string, model: string): Promise<{ entryId: string; model: string }> {
+  const userId = getActiveUserId();
   const id = String(entryId || '').trim();
   const rawModel = String(model || '').trim();
   if (!id || !rawModel) throw new Error('entryId and model required');
-  const store = loadProfiles({ throwOnInvalidExisting: true });
+  const store = loadProfiles({ throwOnInvalidExisting: true, userId });
+  const snapshot = JSON.stringify(store);
   const target = store.entries.find((e) => e.entryId === id);
   if (!target) throw new Error('entry not found');
   const m = resolveModelUpgrade(target.provider, rawModel).modelId;
@@ -1745,6 +1751,7 @@ export async function updateEntryModel(entryId: string, model: string): Promise<
   }
   assertModelProviderAllowed(target.provider, m);
   await assertRuntimeSelectableModel(target.provider, m);
+  assertAuthStoreUnchanged(userId, snapshot);
   // Deduplicate: if another entry with the same (provider, model, profileId)
   // already exists, removing the target makes the priority list cleaner.
   const collision = store.entries.find(
@@ -1752,7 +1759,7 @@ export async function updateEntryModel(entryId: string, model: string): Promise<
   );
   if (collision) throw new Error('same (provider, model, profile) entry already exists');
   target.model = m;
-  saveProfiles(store);
+  saveProfiles(store, userId);
   invalidateCoreAgentRunner();
   return { entryId: id, model: m };
 }
@@ -1770,9 +1777,12 @@ export async function removeEntry(entryId: string): Promise<{ removed: boolean }
 }
 
 export async function reorderEntries(orderedIds: string[]): Promise<{ entries: EntryView[] }> {
+  const userId = getActiveUserId();
   if (!Array.isArray(orderedIds)) throw new Error('orderedIds must be an array');
-  const store = loadProfiles({ throwOnInvalidExisting: true });
+  const store = loadProfiles({ throwOnInvalidExisting: true, userId });
+  const snapshot = JSON.stringify(store);
   const runtimeResolvable = await buildRuntimeModelResolver(store.entries);
+  assertAuthStoreUnchanged(userId, snapshot);
   const byId = new Map(store.entries.map((e) => [e.entryId, e]));
   const reordered: Entry[] = [];
   for (const id of orderedIds) {
@@ -1784,7 +1794,7 @@ export async function reorderEntries(orderedIds: string[]): Promise<{ entries: E
     if (byId.has(e.entryId)) reordered.push(e);
   }
   store.entries = reordered;
-  saveProfiles(store);
+  saveProfiles(store, userId);
   invalidateCoreAgentRunner();
   const lookup = await buildModelNameLookup();
   return {
@@ -1802,9 +1812,11 @@ export async function selectEntry(
   entryId: string,
   requestedModel?: string,
 ): Promise<{ entries: EntryView[] }> {
+  const userId = getActiveUserId();
   const id = String(entryId || '').trim();
   if (!id) throw new Error('entryId required');
-  const store = loadProfiles({ throwOnInvalidExisting: true });
+  const store = loadProfiles({ throwOnInvalidExisting: true, userId });
+  const snapshot = JSON.stringify(store);
   const selected = store.entries.find((entry) => entry.entryId === id);
   if (!selected) throw modelNotAvailableError();
 
@@ -1826,6 +1838,7 @@ export async function selectEntry(
     selected.model = model;
   }
   const runtimeResolvable = await buildRuntimeModelResolver(store.entries);
+  assertAuthStoreUnchanged(userId, snapshot);
   if (
     !isEntryAllowed(store, selected)
     || !runtimeResolvable(selected.provider, selected.model)
@@ -1840,7 +1853,7 @@ export async function selectEntry(
   store.entries = store.entries.map((entry) => (
     runnableIds.has(entry.entryId) ? ordered[orderedIndex++] : entry
   ));
-  saveProfiles(store);
+  saveProfiles(store, userId);
   invalidateCoreAgentRunner();
 
   const lookup = await buildModelNameLookup();
@@ -1863,6 +1876,7 @@ type FlowStatus =
 
 interface Flow {
   flowId: string;
+  userId: string;
   provider: string;
   label: string;
   status: FlowStatus;
@@ -1877,6 +1891,31 @@ interface Flow {
 
 const flows = new Map<string, Flow>();
 let _flowCounter = 0;
+
+function isActiveAuthOwner(userId: string): boolean {
+  return hasActiveUser() && getActiveUserId() === userId;
+}
+
+function assertAuthStoreUnchanged(userId: string, snapshot: string): void {
+  assertActiveAuthOwner(userId);
+  const current = loadProfiles({ throwOnInvalidExisting: true, userId });
+  if (JSON.stringify(current) !== snapshot) throw modelNotAvailableError();
+}
+
+function assertActiveAuthOwner(userId: string): void {
+  if (!isActiveAuthOwner(userId)) throw modelNotAvailableError();
+}
+
+function isLiveOAuthFlow(flow: Flow): boolean {
+  return flows.get(flow.flowId) === flow
+    && !flow.abortController.signal.aborted
+    && isActiveAuthOwner(flow.userId);
+}
+
+function ownedOAuthFlow(flowId: string): Flow | undefined {
+  const flow = flows.get(flowId);
+  return flow && isActiveAuthOwner(flow.userId) ? flow : undefined;
+}
 
 function nextFlowId(): string {
   _flowCounter = (_flowCounter + 1) % 100000;
@@ -1946,10 +1985,12 @@ export async function startOAuth(
   providerId: string,
   label?: string,
 ): Promise<{ flowId: string; status: FlowStatus }> {
+  const userId = getActiveUserId();
   const id = String(providerId || '').trim();
   if (!id) throw new Error('provider required');
   const oauth = await piOauth();
   const provider = await oauth.getOAuthProvider(id);
+  assertActiveAuthOwner(userId);
   if (!provider) {
     const hint = _minimaxRegisterError && id.startsWith('minimax-portal')
       ? t('oauth.minimax.register_error_hint', { message: _minimaxRegisterError })
@@ -1964,6 +2005,7 @@ export async function startOAuth(
   const usesCallbackServer = provider.usesCallbackServer !== false;
   const flow: Flow = {
     flowId,
+    userId,
     provider: id,
     label: chosenLabel,
     status: { kind: 'starting' },
@@ -1975,6 +2017,7 @@ export async function startOAuth(
     .login({
       signal: flow.abortController.signal,
       onAuth: (info) => {
+        if (!isLiveOAuthFlow(flow)) return;
         flow.status = {
           kind: 'awaiting_auth',
           url: info.url,
@@ -1986,6 +2029,7 @@ export async function startOAuth(
         openExternalUrl(info.url);
       },
       onDeviceCode: (info) => {
+        if (!isLiveOAuthFlow(flow)) return;
         const details = [`Code: ${info.userCode}`];
         if (info.expiresInSeconds) details.push(`Expires in ${info.expiresInSeconds} seconds.`);
         flow.status = {
@@ -1997,6 +2041,7 @@ export async function startOAuth(
         openExternalUrl(info.verificationUri);
       },
       onPrompt: async (prompt) => {
+        if (!isLiveOAuthFlow(flow)) return '';
         flow.status = {
           kind: 'awaiting_input',
           prompt: {
@@ -2022,13 +2067,14 @@ export async function startOAuth(
       //      lets pi-ai drain out of `server.waitForCode()` and reach the
       //      `finally { server.close() }` block, so port 1455 gets freed
       //      instead of leaking.
-      onManualCodeInput: () => new Promise<string>((resolve) => {
+      onManualCodeInput: () => !isLiveOAuthFlow(flow) ? Promise.resolve('') : new Promise<string>((resolve) => {
         flow.manualInputResolver = (val) => {
           flow.manualInputResolver = undefined;
           resolve(val);
         };
       }),
       onSelect: async (prompt) => {
+        if (!isLiveOAuthFlow(flow)) return undefined;
         const selected = prompt.options[0];
         flow.status = {
           kind: 'progress',
@@ -2037,10 +2083,15 @@ export async function startOAuth(
         return selected?.id;
       },
       onProgress: (message) => {
+        if (!isLiveOAuthFlow(flow)) return;
         flow.status = { kind: 'progress', message };
       },
     })
     .then((credentials) => {
+      if (!isLiveOAuthFlow(flow)) {
+        if (!flow.abortController.signal.aborted) flow.status = { kind: 'error', error: 'cancelled' };
+        return;
+      }
       const store = loadProfiles({ throwOnInvalidExisting: true });
       // Prefer a human-identifiable label from the token if the caller
       // didn't supply one — email local-part, then accountId prefix —
@@ -2072,20 +2123,28 @@ export async function startOAuth(
       flow.status = { kind: 'done', profileId: pid };
     })
     .catch((err: unknown) => {
-      flow.status = { kind: 'error', error: (err as Error)?.message || String(err) };
+      if (flow.abortController.signal.aborted) return;
+      if (!isActiveAuthOwner(userId)) {
+        flow.status = { kind: 'error', error: 'cancelled' };
+        return;
+      }
+      // Upstream exceptions can contain token responses and redirect data.
+      // An empty detail selects the Renderer's existing localized failure copy.
+      log.warn('oauth authorization failed', { provider: id, error: logErrorSummary(err) });
+      flow.status = { kind: 'error', error: '' };
     });
 
   return { flowId, status: flow.status };
 }
 
 export function pollOAuthFlow(flowId: string): { status: FlowStatus } {
-  const flow = flows.get(flowId);
+  const flow = ownedOAuthFlow(flowId);
   if (!flow) return { status: { kind: 'error', error: 'unknown flow' } };
   return { status: flow.status };
 }
 
 export function submitOAuthInput(flowId: string, value: string): { ok: boolean } {
-  const flow = flows.get(flowId);
+  const flow = ownedOAuthFlow(flowId);
   if (!flow) return { ok: false };
   const val = String(value ?? '');
   // Prefer the late-stage `onPrompt` resolver if active (bind failed), else
@@ -2099,7 +2158,7 @@ export function submitOAuthInput(flowId: string, value: string): { ok: boolean }
 }
 
 export function cancelOAuthFlow(flowId: string): { ok: boolean } {
-  const flow = flows.get(flowId);
+  const flow = ownedOAuthFlow(flowId);
   if (!flow) return { ok: false };
   try { flow.abortController.abort(); } catch { /* noop */ }
   // Resolve both resolvers with empty string so pi-ai's flow drains out,
@@ -2158,7 +2217,8 @@ function groupEntries(entries: Entry[]): Entry[][] {
  * Resolve the usable `apiKey` for an entry (returns undefined if the
  * profile is gone, the OAuth token expired and refresh fails, etc.).
  */
-async function resolveEntryApiKey(store: ProfilesFile, entry: Entry): Promise<string | undefined> {
+async function resolveEntryApiKey(store: ProfilesFile, entry: Entry, userId: string): Promise<string | undefined> {
+  if (!isActiveAuthOwner(userId)) return undefined;
   const prof = store.profiles[entry.profileId];
   if (!prof || !isStoredProfileAllowed(prof)) return undefined;
   if (prof.type === 'api_key') return prof.key;
@@ -2167,10 +2227,12 @@ async function resolveEntryApiKey(store: ProfilesFile, entry: Entry): Promise<st
     return prof.access;
   }
   try {
-    const refreshed = await refreshOAuthProfile(entry.profileId);
+    const refreshed = await refreshOAuthProfile(entry.profileId, userId);
+    if (!isActiveAuthOwner(userId)) return undefined;
     if (!refreshed) rememberOAuthRefreshFailure(entry.profileId, prof);
     return refreshed;
   } catch (err) {
+    if (!isActiveAuthOwner(userId)) return undefined;
     rememberOAuthRefreshFailure(entry.profileId, prof);
     log.warn('OAuth refresh failed', { profileId: entry.profileId, error: logErrorSummary(err) });
     return undefined;
@@ -2264,9 +2326,11 @@ export function bumpEntryLastUsed(entryId: string): void {
  * bumps the winning candidate via `onSuccess`).
  */
 export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
-  const store = loadProfiles();
+  const userId = getActiveUserId();
+  const store = loadProfiles({ userId });
   if (store.entries.length === 0) return [];
   const runtimeResolvable = await buildRuntimeModelResolver(store.entries);
+  if (!isActiveAuthOwner(userId)) return [];
 
   // Flatten: preserve entries[] order across groups, but within a
   // consecutive same-(provider, model) run, sort oldest lastUsed first.
@@ -2291,7 +2355,9 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
       log.info(`skipping cooled-down profile ${entry.profileId}`);
       continue;
     }
-    const apiKey = await resolveEntryApiKey(store, entry);
+    const apiKey = await resolveEntryApiKey(store, entry, userId);
+    // Even an immediately available key crosses an await boundary here.
+    if (!isActiveAuthOwner(userId)) return [];
     if (!apiKey) continue;
     const customConfig = customRuntimeConfigFromProfile(store.profiles[entry.profileId]);
     choices.push({
@@ -2335,7 +2401,8 @@ export async function pickRotationKey(providerId: string): Promise<{
   const id = String(providerId || '').trim();
   if (!id) return null;
   if (!isModelProviderAllowed(id)) return null;
-  const store = loadProfiles({ throwOnInvalidExisting: true });
+  const userId = getActiveUserId();
+  const store = loadProfiles({ throwOnInvalidExisting: true, userId });
   const candidates = Object.entries(store.profiles)
     .filter(([, p]) => p.provider === id)
     .sort(([, a], [, b]) => (a.lastUsed || 0) - (b.lastUsed || 0));
@@ -2347,13 +2414,14 @@ export async function pickRotationKey(providerId: string): Promise<{
     let apiKey: string | undefined;
     if (prof.type === 'api_key') apiKey = prof.key;
     else if (Date.now() < prof.expires) apiKey = prof.access;
-    else apiKey = await refreshOAuthProfile(pid).catch(() => undefined);
+    else apiKey = await refreshOAuthProfile(pid, userId).catch(() => undefined);
+    if (!isActiveAuthOwner(userId)) return null;
     if (!apiKey) continue;
     const customConfig = customRuntimeConfigFromProfile(prof);
     if (providerUsesCustomOpenAIConfig(id) && !customConfig) continue;
-    const fresh = loadProfiles({ throwOnInvalidExisting: true });
+    const fresh = loadProfiles({ throwOnInvalidExisting: true, userId });
     const target = fresh.profiles[pid];
-    if (target) { target.lastUsed = Date.now(); saveProfiles(fresh); }
+    if (target) { target.lastUsed = Date.now(); saveProfiles(fresh, userId); }
     return {
       profileId: pid,
       provider: id,
@@ -2365,8 +2433,8 @@ export async function pickRotationKey(providerId: string): Promise<{
   return null;
 }
 
-async function refreshOAuthProfile(profileId: string): Promise<string | undefined> {
-  const store = loadProfiles();
+async function refreshOAuthProfile(profileId: string, userId = getActiveUserId()): Promise<string | undefined> {
+  const store = loadProfiles({ userId });
   const prof = store.profiles[profileId];
   if (!prof || prof.type !== 'oauth') return undefined;
 
@@ -2374,12 +2442,12 @@ async function refreshOAuthProfile(profileId: string): Promise<string | undefine
   try {
     oauth = await piOauth();
   } catch (err) {
-    rememberOAuthRefreshFailure(profileId, prof);
+    if (isActiveAuthOwner(userId)) rememberOAuthRefreshFailure(profileId, prof);
     throw err;
   }
   const provider = await oauth.getOAuthProvider(prof.provider);
   if (!provider) {
-    rememberOAuthRefreshFailure(profileId, prof);
+    if (isActiveAuthOwner(userId)) rememberOAuthRefreshFailure(profileId, prof);
     return undefined;
   }
 
@@ -2397,10 +2465,10 @@ async function refreshOAuthProfile(profileId: string): Promise<string | undefine
   try {
     newCreds = await provider.refreshToken(creds as any);
   } catch (err) {
-    rememberOAuthRefreshFailure(profileId, prof);
+    if (isActiveAuthOwner(userId)) rememberOAuthRefreshFailure(profileId, prof);
     throw err;
   }
-  const fresh = loadProfiles({ throwOnInvalidExisting: true });
+  const fresh = loadProfiles({ throwOnInvalidExisting: true, userId });
   const target = fresh.profiles[profileId];
   if (target && target.type === 'oauth') {
     target.access = newCreds.access;
@@ -2411,9 +2479,9 @@ async function refreshOAuthProfile(profileId: string): Promise<string | undefine
         (target as OAuthProfile)[k] = v;
       }
     }
-    saveProfiles(fresh);
+    saveProfiles(fresh, userId);
   }
-  clearOAuthRefreshFailure(profileId);
+  if (isActiveAuthOwner(userId)) clearOAuthRefreshFailure(profileId);
   return provider.getApiKey(newCreds);
 }
 
@@ -2456,7 +2524,9 @@ export async function testConnection(
   if (!selectedModel || !isSelectableModel(pid, selectedModel)) {
     return { ok: false, error: t('errors.model_not_available') };
   }
+  const userId = getActiveUserId();
   const mod = await ca();
+  if (!isActiveAuthOwner(userId)) return { ok: false, error: t('errors.model_not_available') };
   const resolvedModel = EXTERNAL_API_PROVIDERS.includes(pid)
     ? null
     : resolveConfiguredPiModel(mod, pid, selectedModel);
@@ -2469,12 +2539,12 @@ export async function testConnection(
   let customConfig: CustomOpenAICompatibleRuntimeConfig | undefined;
 
   if (chosenProfileId) {
-    const store = loadProfiles();
+    const store = loadProfiles({ userId });
     const prof = store.profiles[chosenProfileId];
     if (!prof || prof.provider !== pid) return { ok: false, error: 'profile not found' };
     if (prof.type === 'api_key') apiKey = prof.key;
     else if (Date.now() < prof.expires) apiKey = prof.access;
-    else apiKey = await refreshOAuthProfile(chosenProfileId).catch(() => undefined);
+    else apiKey = await refreshOAuthProfile(chosenProfileId, userId).catch(() => undefined);
     customConfig = customRuntimeConfigFromProfile(prof) || undefined;
   } else {
     const choice = await pickRotationKey(pid);
@@ -2485,6 +2555,7 @@ export async function testConnection(
     }
   }
 
+  if (!isActiveAuthOwner(userId)) return { ok: false, error: t('errors.model_not_available') };
   if (!apiKey) return { ok: false, error: 'no credential stored for this provider', profileId: chosenProfileId };
   if (providerUsesCustomOpenAIConfig(pid) && !customConfig) {
     return { ok: false, error: 'custom model configuration is incomplete', profileId: chosenProfileId };
@@ -2498,6 +2569,7 @@ export async function testConnection(
     const t0 = Date.now();
     try {
       const ext = await import('../model/core-agent/external-providers');
+      if (!isActiveAuthOwner(userId)) return { ok: false, error: t('errors.model_not_available') };
       let provider;
       let probeModel = modelForTest;
       if (pid === 'moonshot') {
@@ -2517,13 +2589,14 @@ export async function testConnection(
       } else {
         throw new Error(`external provider "${pid}" has no test-connection factory yet`);
       }
+      if (!isActiveAuthOwner(userId)) return { ok: false, error: t('errors.model_not_available') };
       const msg = await provider.complete({
         model: probeModel,
         systemPrompt: 'You are a connectivity probe; reply with a single word.',
         messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
         maxTokens: 1,
       });
-      if (chosenProfileId) clearCooldown(chosenProfileId);
+      if (chosenProfileId && isActiveAuthOwner(userId)) clearCooldown(chosenProfileId);
       return { ok: true, durationMs: Date.now() - t0, model: msg.model || probeModel, profileId: chosenProfileId };
     } catch (err) {
       const errMsg = sanitizeConnectionError(err, { apiKey, customConfig });
@@ -2572,7 +2645,7 @@ export async function testConnection(
       messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
       maxTokens: 1,
     });
-    if (chosenProfileId) clearCooldown(chosenProfileId);
+    if (chosenProfileId && isActiveAuthOwner(userId)) clearCooldown(chosenProfileId);
     return { ok: true, durationMs: Date.now() - t0, model: msg.model || '', profileId: chosenProfileId };
   } catch (err) {
     return {

@@ -4,6 +4,7 @@
 // remain owned by Settings > Models.
 
 let _composerModelEntries = [];
+let _composerModelEntriesEpoch = 0;
 let _composerModelMenu = null;
 let _composerModelOpening = null;
 let _composerModelBusy = false;
@@ -193,11 +194,10 @@ function _renderComposerModelChips() {
 }
 
 async function _refreshComposerModelEntries() {
+  const epoch = ++_composerModelEntriesEpoch;
   try {
     const res = await window.orkas.invoke('auth.listComposerEntries');
-    if (res && res.ok && Array.isArray(res.entries)) {
-      // Managed subscription models do not exist in the open-source build.
-      // Keep this boundary defensive so a stale profile cannot surface one.
+    if (epoch === _composerModelEntriesEpoch && res && res.ok && Array.isArray(res.entries)) {
       _composerModelEntries = res.entries.filter((entry) => entry && entry.profileType !== 'managed');
     }
   } catch (_) {
@@ -808,6 +808,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('orkas:model-entries-changed', (event) => {
     const entries = event && event.detail && event.detail.entries;
     if (Array.isArray(entries)) {
+      _composerModelEntriesEpoch += 1;
       _composerModelEntries = entries.filter((entry) => entry && entry.profileType !== 'managed');
       _renderComposerModelChips();
     } else {
