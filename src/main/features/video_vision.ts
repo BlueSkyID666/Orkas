@@ -30,7 +30,7 @@
 import * as fs from 'node:fs/promises';
 
 import { chatWithModel } from '../model/client';
-import { toCompressedGrayJpeg } from '../util/image-transform';
+import { toCompressedJpeg } from '../util/image-transform';
 import { createLogger } from '../logger';
 import { logErrorSummary, logPathRef } from '../util/log-redact';
 
@@ -139,7 +139,7 @@ function buildVisionMessage(question: string, frameCount: number): string {
 async function loadFrame(p: string): Promise<LoadedImage | null> {
   try {
     const raw = await fs.readFile(p);
-    const compressed = await toCompressedGrayJpeg(raw, { maxDim: FRAME_MAX_DIM, quality: FRAME_JPEG_QUALITY, grayscale: false });
+    const compressed = await toCompressedJpeg(raw, { maxDim: FRAME_MAX_DIM, quality: FRAME_JPEG_QUALITY });
     return { data: compressed.buf.toString('base64'), mediaType: 'image/jpeg' };
   } catch (err) {
     log.warn('frame load failed', { frame: logPathRef(p), error: logErrorSummary(err) });
