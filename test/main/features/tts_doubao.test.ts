@@ -66,6 +66,17 @@ describe('parseDoubaoV3Ndjson', () => {
     expect(parseDoubaoV3Ndjson('').ok).toBe(false);
   });
 
+  it('ignores JSON values which are not events without losing adjacent audio', () => {
+    const raw = ['null', '[]', 'false', '42', '"stray"',
+      JSON.stringify({ code: 0, data: b64('voice') }), '{"code":20000000}',
+    ].join('\n');
+    expect(parseDoubaoV3Ndjson(raw)).toEqual({ ok: true, audio: Buffer.from('voice') });
+  });
+
+  it('does not turn a null-only response into audio or an uncaught exception', () => {
+    expect(parseDoubaoV3Ndjson('null')).toMatchObject({ ok: false });
+  });
+
   it('skips a code-0 line whose data is empty (not a chunk)', () => {
     const raw = [
       JSON.stringify({ code: 0, data: '' }),
