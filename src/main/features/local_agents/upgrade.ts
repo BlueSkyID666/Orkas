@@ -12,6 +12,9 @@ import { killProcessTree } from './backends/base.js';
 import { resolveCli, invalidateCache, type LocalCliType, type LocalCliEntry } from './registry.js';
 import { detectVersionResult, checkMinVersion, cliVersionAtLeast } from './version.js';
 import { whichBin } from './which.js';
+import { createLogger } from '../../logger.js';
+
+const log = createLogger('local-cli-upgrade');
 
 const PACKAGES: Record<LocalCliType, readonly string[]> = {
   codex: ['@openai/codex'], claude: ['@anthropic-ai/claude-code'],
@@ -23,9 +26,12 @@ type CliUpgradeOutcome = CliUpgradeInfo & { ok: boolean; error_code?: 'failed' |
 export type CliUpgradeResult = CliUpgradeOutcome & { operation_id: number; duration_ms: number };
 let operationCounter = 0;
 const inFlight = new Map<LocalCliType, Promise<CliUpgradeResult>>();
+type CommandFailureDiagnostic =
+  | { phase: 'spawn'; spawn_code: string }
+  | { phase: 'exit'; exit_code: number | null; signal: string };
 
 /** No output enters UI/logs. Help capture and total output are independently bounded. */
-export function runUpgradeCommand(command: string, args: string[], timeoutMs: number, capture = false): Promise<{ ok: boolean; text: string; error?: 'failed' | 'timeout' | 'output_limit' }> {
+export function runUpgradeCommand(command: string, args: string[], timeoutMs: number, capture = false): Promise<{ ok: boolean; text: string; error?: 'failed' | 'timeout' | 'output_limit'; diagnostic?: CommandFailureDiagnostic }> {
   return new Promise(resolve => {
     const launch = resolveCliCommand(command, args);
     let settled = false; let bytes = 0; let text = '';
@@ -35,10 +41,10 @@ export function runUpgradeCommand(command: string, args: string[], timeoutMs: nu
       windowsHide: true, windowsVerbatimArguments: launch.windowsVerbatimArguments,
       detached: process.platform !== 'win32',
     });
-    const finish = (ok: boolean, error?: 'failed' | 'timeout' | 'output_limit', kill = false) => {
+    const finish = (ok: boolean, error?: 'failed' | 'timeout' | 'output_limit', kill = false, diagnostic?: CommandFailureDiagnostic) => {
       if (settled) return;
       settled = true; clearTimeout(timer);
-      const done = () => resolve({ ok, text, ...(error ? { error } : {}) });
+      const done = () => resolve({ ok, text, ...(error ? { error } : {}), ...(diagnostic ? { diagnostic } : {}) });
       if (kill) killProcessTree(child, 'SIGKILL', { onComplete: done }); else done();
     };
     const read = (chunk: Buffer) => {
@@ -48,8 +54,14 @@ export function runUpgradeCommand(command: string, args: string[], timeoutMs: nu
       if (capture && text.length < 64 * 1024) text += chunk.toString('utf8').slice(0, 64 * 1024 - text.length);
     };
     child.stdout?.on('data', read); child.stderr?.on('data', read);
-    child.on('error', () => finish(false, 'failed'));
-    child.on('close', code => finish(code === 0, code === 0 ? undefined : 'failed'));
+    child.on('error', (error: NodeJS.ErrnoException) => finish(false, 'failed', false, {
+      phase: 'spawn', spawn_code: error.code && Object.hasOwn(os.constants.errno, error.code) ? error.code : 'unknown',
+    }));
+    child.on('close', (code, signal) => finish(code === 0, code === 0 ? undefined : 'failed', false,
+      code === 0 ? undefined : {
+        phase: 'exit', exit_code: Number.isSafeInteger(code) ? code : null,
+        signal: signal ? (Object.hasOwn(os.constants.signals, signal) ? signal : 'unknown') : 'none',
+      }));
     timer = setTimeout(() => finish(false, 'timeout', true), timeoutMs); timer.unref?.();
   });
 }
@@ -61,12 +73,24 @@ export async function planCliUpgrade(type: LocalCliType, binPath: string): Promi
   if (process.platform === 'win32') {
     const launch = resolveCliCommand(binPath, []);
     const nodeEntry = launch.args[0];
-    if (nodeEntry && path.isAbsolute(nodeEntry) && /\.(?:c?js|mjs)$/i.test(nodeEntry)) {
+    // The resolver also validates extension-less Node entrypoints by shebang.
+    if (nodeEntry && launch.command !== binPath && launch.args.length === 1 && path.isAbsolute(nodeEntry)) {
       try { real = await fs.realpath(nodeEntry); } catch { return unavailable; }
     }
   }
   const segments = real.split(path.sep);
   if (segments.some(s => s.endsWith('.app')) && segments.includes('Contents')) return unavailable;
+  // Homebrew owns its formula even when it wraps a global npm installation.
+  const cellar = segments.indexOf('Cellar'); const cask = segments.indexOf('Caskroom');
+  const owner = cellar >= 0 ? cellar : cask;
+  const brewNames: Record<LocalCliType, readonly string[]> = {
+    codex: ['codex'], claude: ['claude-code'], opencode: ['opencode'], openclaw: ['openclaw'], hermes: [],
+  };
+  if (owner >= 0 && brewNames[type].includes(segments[owner + 1])) {
+    const brew = path.join(segments.slice(0, owner).join(path.sep), 'bin', 'brew');
+    try { await fs.access(brew); return { method: 'brew', command: brew, args: ['upgrade', ...(cask >= 0 ? ['--cask'] : []), segments[owner + 1]] }; }
+    catch { return unavailable; }
+  }
   // Package ownership is established by both package identity and its global layout.
   let dir = path.dirname(real);
   for (let depth = 0; depth < 8; depth++) {
@@ -89,16 +113,6 @@ export async function planCliUpgrade(type: LocalCliType, binPath: string): Promi
       }
     } catch { /* bounded ancestor walk; no user content is returned */ }
     const parent = path.dirname(dir); if (parent === dir) break; dir = parent;
-  }
-  const cellar = segments.indexOf('Cellar'); const cask = segments.indexOf('Caskroom');
-  const owner = cellar >= 0 ? cellar : cask;
-  const brewNames: Record<LocalCliType, readonly string[]> = {
-    codex: ['codex'], claude: ['claude-code'], opencode: ['opencode'], openclaw: ['openclaw'], hermes: [],
-  };
-  if (owner >= 0 && brewNames[type].includes(segments[owner + 1])) {
-    const brew = path.join(segments.slice(0, owner).join(path.sep), 'bin', 'brew');
-    try { await fs.access(brew); return { method: 'brew', command: brew, args: ['upgrade', ...(cask >= 0 ? ['--cask'] : []), segments[owner + 1]] }; }
-    catch { return unavailable; }
   }
   const native = (type === 'codex' && segments.includes('standalone') && segments.includes('packages'))
     || (type === 'claude' && segments.includes('claude') && segments.includes('versions'))
@@ -146,7 +160,15 @@ export function upgradeLocalCli(type: LocalCliType): Promise<CliUpgradeResult> {
     }
     const result = await runUpgradeCommand(plan.command, plan.args, 10 * 60_000);
     invalidateCache(type);
-    if (!result.ok) return { ...metadata, ok: false, error_code: result.error || 'failed' };
+    if (!result.ok) {
+      // Only explicit maintenance logs one bounded receipt. Capability probes
+      // remain quiet; paths, arguments, output and raw errors never leave here.
+      log.warn('CLI upgrade command failed', {
+        cli: type, method: plan.method, reason: result.error || 'failed',
+        ...(result.diagnostic || { phase: 'limit' }),
+      });
+      return { ...metadata, ok: false, error_code: result.error || 'failed' };
+    }
     // Verify the original entry point, not a newly discovered higher-priority install.
     const probe = await detectVersionResult(entry.path);
     if (probe.status !== 'success' || checkMinVersion(type, probe.version)

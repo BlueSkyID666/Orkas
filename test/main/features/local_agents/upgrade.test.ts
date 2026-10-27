@@ -1,18 +1,104 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as spawnCommand from '../../../../src/main/features/local_agents/spawn-command';
+import * as which from '../../../../src/main/features/local_agents/which';
 import { planCliUpgrade, runUpgradeCommand, upgradeLocalCli } from '../../../../src/main/features/local_agents/upgrade';
 import { invalidateCache } from '../../../../src/main/features/local_agents/registry';
+const warningLog = vi.hoisted(() => vi.fn());
+vi.mock('../../../../src/main/logger', () => ({ createLogger: () => ({
+  warn: warningLog, info: vi.fn(), debug: vi.fn(), error: vi.fn(),
+}) }));
 const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
 let root = ''; let previous: string | undefined;
 function executable(file: string, source: string) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `#!${TEST_NODE}\n${source}\n`); fs.chmodSync(file, 0o755); return file;
 }
-beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-upgrade-')); previous = process.env.ORKAS_CODEX_PATH; invalidateCache(); });
-afterEach(() => { if (previous === undefined) delete process.env.ORKAS_CODEX_PATH; else process.env.ORKAS_CODEX_PATH = previous; invalidateCache(); fs.rmSync(root, { recursive: true, force: true }); });
+beforeEach(() => { warningLog.mockClear(); root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-upgrade-')); previous = process.env.ORKAS_CODEX_PATH; invalidateCache(); });
+afterEach(() => { vi.restoreAllMocks(); if (previous === undefined) delete process.env.ORKAS_CODEX_PATH; else process.env.ORKAS_CODEX_PATH = previous; invalidateCache(); fs.rmSync(root, { recursive: true, force: true }); });
+describe('CLI maintenance failure evidence', () => {
+  it('retains a safe spawn code without the missing path or raw error', async () => {
+    const missing = path.join(root, process.platform === 'win32' ? 'private-missing.exe' : 'private-missing');
+    const result = await runUpgradeCommand(missing, [], 3000);
+    expect(result).toEqual({ ok: false, text: '', error: 'failed', diagnostic: { phase: 'spawn', spawn_code: 'ENOENT' } });
+    expect(JSON.stringify(result)).not.toContain(missing);
+    expect(warningLog).not.toHaveBeenCalled(); // Background capability probes never add warnings.
+  });
+
+  it('distinguishes a real updater exit from spawn failure without retaining output', async () => {
+    const result = await runUpgradeCommand(TEST_NODE,
+      ['-e', "process.stderr.write('PRIVATE_UPDATER_OUTPUT'); process.exit(7)"], 3000);
+    expect(result).toEqual({ ok: false, text: '', error: 'failed', diagnostic: { phase: 'exit', exit_code: 7, signal: 'none' } });
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_UPDATER_OUTPUT');
+    expect(warningLog).not.toHaveBeenCalled();
+  });
+});
+
 describe('CLI installation ownership', () => {
+  it.runIf(process.platform === 'win32')('plans a real extension-less Windows npm launcher without running an installer', async () => {
+    const packageRoot = path.join(root, 'node_modules', 'opencode-ai');
+    const entry = path.join(packageRoot, 'bin', 'opencode');
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.writeFileSync(entry, '#!/usr/bin/env node\nconsole.log("1.2.27");\n');
+    fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'opencode-ai' }));
+    const bin = path.join(root, 'opencode.cmd');
+    fs.writeFileSync(bin, '@echo off\r\nnode.exe "%~dp0node_modules\\opencode-ai\\bin\\opencode" %*\r\n');
+    fs.writeFileSync(path.join(root, 'opencode.ps1'), '$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\r\n& "node.exe" "$basedir/node_modules/opencode-ai/bin/opencode" $args\r\n');
+    const npm = path.join(root, 'npm.cmd');
+    const marker = path.join(root, 'installer-ran');
+    fs.writeFileSync(npm, `@echo off\r\necho unexpected>"${marker}"\r\nexit /b 9\r\n`);
+    const saved = { PATH: process.env.PATH, PATHEXT: process.env.PATHEXT, ORKAS_TEST_NODE: process.env.ORKAS_TEST_NODE };
+    try {
+      process.env.PATH = root; process.env.PATHEXT = '.CMD;.EXE'; process.env.ORKAS_TEST_NODE = TEST_NODE;
+      expect(spawnCommand.resolveCliCommand(bin, [])).toEqual({ command: TEST_NODE, args: [entry] });
+      const plan = await planCliUpgrade('opencode', bin);
+      // PATHEXT may return .CMD for the same case-insensitive Windows file.
+      expect(plan.command?.toLowerCase()).toBe(npm.toLowerCase());
+      expect(plan).toMatchObject({ method: 'npm',
+        args: ['install', '--global', 'opencode-ai@latest', '--prefix', fs.realpathSync(root), '--no-audit', '--no-fund'] });
+      expect(await planCliUpgrade('claude', bin)).toEqual({ method: 'unavailable' });
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name]; else process.env[name] = value;
+      }
+    }
+  });
+
+  it.each(['cli.js', 'opencode'])('follows an already-validated Windows npm Node entry regardless of its extension: %s', async filename => {
+    // Filesystem and package ownership are real; the resolver's Windows receipt
+    // is supplied at its boundary so this contract also runs on POSIX hosts.
+    const packageRoot = path.join(root, 'node_modules', 'opencode-ai');
+    const entry = executable(path.join(packageRoot, 'bin', filename), '');
+    fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'opencode-ai' }));
+    const bin = executable(path.join(root, 'opencode.cmd'), '');
+    const npm = executable(path.join(root, 'npm.cmd'), '');
+    vi.spyOn(spawnCommand, 'resolveCliCommand').mockReturnValue({ command: TEST_NODE, args: [entry] });
+    vi.spyOn(which, 'whichBin').mockResolvedValue(npm);
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    try {
+      Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
+      expect(await planCliUpgrade('opencode', bin)).toEqual({ method: 'npm', command: npm,
+        args: ['install', '--global', 'opencode-ai@latest', '--prefix', fs.realpathSync(root), '--no-audit', '--no-fund'] });
+      expect(await planCliUpgrade('claude', bin)).toEqual({ method: 'unavailable' });
+    } finally { Object.defineProperty(process, 'platform', descriptor); }
+  });
+
+  it.skipIf(process.platform === 'win32')('keeps Homebrew ownership when its formula wraps a global npm layout', async () => {
+    const prefix = path.join(root, 'Cellar', 'opencode', '1.2.27', 'libexec');
+    const packageRoot = path.join(prefix, 'lib', 'node_modules', 'opencode-ai');
+    const entry = executable(path.join(packageRoot, 'bin', 'opencode'), '');
+    fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'opencode-ai' }));
+    executable(path.join(prefix, 'bin', 'npm'), '');
+    const brew = executable(path.join(root, 'bin', 'brew'), '');
+    const bin = path.join(root, 'bin', 'opencode'); fs.symlinkSync(entry, bin);
+    expect(await planCliUpgrade('opencode', bin)).toEqual({ method: 'brew', command: fs.realpathSync(brew), args: ['upgrade', 'opencode'] });
+    fs.unlinkSync(brew);
+    expect(await planCliUpgrade('opencode', bin)).toEqual({ method: 'unavailable' });
+  });
+
   it('does not modify source or bundled application binaries', async () => {
     for (const file of ['source/codex', 'Codex.app/Contents/bin/codex']) {
       const bin = executable(path.join(root, file), `console.log('  update Upgrade Codex');`);
@@ -95,7 +181,14 @@ else if (process.argv.includes('update')) {
   });
   it.each(['failure', 'unchanged'])('does not claim a successful upgrade for %s', async mode => {
     native(mode);
-    expect(await upgradeLocalCli('codex')).toMatchObject({ ok: false, error_code: mode === 'failure' ? 'failed' : 'verification_failed' });
+    const result = await upgradeLocalCli('codex');
+    expect(result).toMatchObject({ ok: false, error_code: mode === 'failure' ? 'failed' : 'verification_failed' });
+    expect(result).not.toHaveProperty('diagnostic'); // No new IPC/telemetry contract.
+    if (mode === 'failure') {
+      expect(warningLog).toHaveBeenCalledExactlyOnceWith('CLI upgrade command failed', {
+        cli: 'codex', method: 'native', reason: 'failed', phase: 'exit', exit_code: 7, signal: 'none',
+      });
+    } else expect(warningLog).not.toHaveBeenCalled();
   });
   it('bounds subprocess deadlines and excessive output without exposing output', async () => {
     const hung = await runUpgradeCommand(TEST_NODE, ['-e', 'setInterval(()=>{},1000)'], 100);
