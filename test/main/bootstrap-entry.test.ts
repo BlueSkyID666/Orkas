@@ -2,8 +2,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { runInNewContext } from 'node:vm';
+import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
+import { finished } from 'node:stream/promises';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+const require = createRequire(import.meta.url);
 
 let root = '';
 
@@ -38,10 +43,58 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  fs.rmSync(root, { recursive: true, force: true });
+  require('original-fs').rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe('desktop bootstrap entry', () => {
+  // Windows container selection needs its native drive/pin fixture; never let
+  // an ASAR contract case choose a real host drive as a side effect.
+  it.skipIf(process.platform === 'win32')('cold-boots the packaged bootstrap and storage helpers from the configured ASAR file projection', async () => {
+    const storageHelpers = ['src/main/install-data-root.cjs', 'src/main/util/migrate-source-data-root.cjs'];
+    for (const relative of storageHelpers) {
+      fs.copyFileSync(path.join(process.cwd(), relative), path.join(root, relative));
+    }
+    fs.writeFileSync(path.join(root, 'src/main/index.js'), `
+      const assert = require('node:assert/strict');
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const expected = path.join(require('node:os').homedir(), '.orkas', 'data');
+      assert.equal(process.env.ORKAS_WORKSPACE_ROOT, expected);
+      assert.ok(fs.statSync(expected).isDirectory());
+      assert.ok(fs.statSync(path.join(expected, '.migrated-from-source')).isFile());
+      assert.equal(typeof require('./util/migrate-source-data-root.cjs').migrateSourceDataRoot, 'function');
+      process.stdout.write('BOOTSTRAP_ASAR_OK');
+    `);
+    // Use the real ASAR glob crawler and archive writer with production file
+    // patterns. The controlled Main/tsx boundaries avoid starting the desktop;
+    // the bootstrap and both early storage modules are their actual bytes.
+    const { createPackageWithOptions, extractFile } = require('@electron/asar');
+    const patterns: string[] = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')).build.files;
+    const archive = path.join(root, 'app.asar');
+    const output = await createPackageWithOptions(root, archive, {
+      pattern: `/{${patterns.filter((pattern) => !pattern.startsWith('!')).join(',')}}`,
+      globOptions: { ignore: patterns.filter((pattern) => pattern.startsWith('!')).map((pattern) => path.join(root, pattern.slice(1)).replaceAll('\\', '/')) },
+    });
+    await finished(output);
+    const launcher = path.join(root, 'launch.cjs');
+    fs.writeFileSync(launcher, `
+      require('node:os').homedir = () => require('node:path').join(__dirname, 'isolated-home');
+      require('./app.asar/bootstrap.cjs');
+    `);
+    const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
+    delete env.ORKAS_WORKSPACE_ROOT;
+    delete env.NODE_OPTIONS;
+    delete env.NODE_PATH;
+    const result = spawnSync(process.execPath, [launcher], { cwd: root, env, encoding: 'utf8', timeout: 10000 });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr.replaceAll(root, '<fixture>')).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toBe('BOOTSTRAP_ASAR_OK');
+    for (const relative of storageHelpers) {
+      expect(extractFile(archive, relative)).toEqual(fs.readFileSync(path.join(process.cwd(), relative)));
+    }
+  }, 15000);
+
   it.each([
     { platform: 'darwin', defaultApp: true, override: false },
     { platform: 'linux', defaultApp: true, override: false },

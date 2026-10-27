@@ -115,6 +115,7 @@ const PACKAGED_BIN_HELPERS = Object.freeze([
   // Shared automation schema loaded by both the packaged Orkas bridge and
   // the in-process auto_tasks tool.
   'auto-tasks-contract.cjs',
+  'project-instructions-contract.cjs',
   'browser-tool-contract.cjs',
   'bridge-skill-runner.cjs',
   // Loaded by the retained Google Workspace bundle, never a standalone catalog transport.
@@ -216,6 +217,7 @@ const PACKAGED_BIN_HELPERS = Object.freeze([
 const DORMANT_BIN_FILES = Object.freeze([]);
 
 const BUILD_ONLY_BIN_FILES = Object.freeze([
+  'project-instructions-contract.d.cts',
   'tool-input-compat.d.cts',
   'builtin-resource-gate.cjs',
   'ensure-runtime.cjs',
