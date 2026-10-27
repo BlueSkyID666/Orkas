@@ -1195,6 +1195,15 @@ describe.each(['legacy', 'modern'] as const)('orkas-bridge.cjs › %s MCP stdio 
       expect(JSON.parse(updated.content.at(-1).text)).toEqual({ ignored_fields: ['future_option'] });
       expect(JSON.stringify(updated)).not.toContain('PRIVATE_VALUE');
       expect(await projects.readProjectInstructions(TEST_UID, pid)).toMatchObject({ content: 'Keep delivery accessible.' });
+      const instructionsSchema = listed.result.tools.find((tool: any) => tool.name === 'project_instructions').inputSchema.properties.instructions;
+      expect(instructionsSchema.description).toContain('4000 UTF-16 code units');
+      expect(instructionsSchema.maxLength).toBeUndefined();
+      const tooLong = await call('project_instructions', { instructions: '😀'.repeat(2000) + 'x' });
+      expect(tooLong.isError).toBe(true);
+      expect(JSON.parse(tooLong.content[0].text)).toEqual({ ok: false, error: 'too_long', limit: 4000, actual: 4001 });
+      expect(await projects.readProjectInstructions(TEST_UID, pid)).toMatchObject({ content: 'Keep delivery accessible.' });
+      expect((await call('project_instructions', { instructions: 'Corrected replacement.' })).isError).toBeFalsy();
+      expect(await projects.readProjectInstructions(TEST_UID, pid)).toMatchObject({ content: 'Corrected replacement.' });
       expect((await call('cross_session_memory', { action: 'add', target: 'project', content: 'The audience uses keyboards.' })).isError).toBeFalsy();
       expect(memory.listEntries(TEST_UID, { project: pid }).entries).toEqual(['The audience uses keyboards.']);
       const rejected = await call('library_save', { source_path: 'deliverable.md', expected_revision: '' });
@@ -1248,11 +1257,11 @@ describe.each(['legacy', 'modern'] as const)('orkas-bridge.cjs › %s MCP stdio 
       const runner = built.runner as unknown as {
         activeTools(): Array<{ name: string; execute(input: Record<string, unknown>, ctx: unknown): Promise<{ content: string; isError?: boolean }> }>;
       };
-      return async (name: string, input: Record<string, unknown>) => {
+      return async (name: string, input: Record<string, unknown>, expectError = false) => {
         const tool = runner.activeTools().find((entry) => entry.name === name);
         expect(tool, `native turn must expose ${name}`).toBeDefined();
         const result = await tool!.execute(input, { workingDir: tmpDir, state: {} });
-        expect(result.isError, result.content).toBeFalsy();
+        expect(Boolean(result.isError), result.content).toBe(expectError);
         return JSON.parse(result.content);
       };
     };
@@ -1260,6 +1269,9 @@ describe.each(['legacy', 'modern'] as const)('orkas-bridge.cjs › %s MCP stdio 
     const initialRules = 'Preserve keyboard access.';
     const initialFact = 'The supported locale is English.';
     await native('project_instructions', { instructions: initialRules });
+    expect(await native('project_instructions', { instructions: '😀'.repeat(2000) + 'x' }, true))
+      .toEqual({ ok: false, error: 'too_long', limit: 4000, actual: 4001 });
+    expect(await projects.readProjectInstructions(TEST_UID, pid)).toMatchObject({ content: initialRules });
     await native('cross_session_memory', { action: 'add', target: 'project', content: initialFact });
     await native('cross_session_memory', { action: 'add', target: 'agent', content: 'Native private note.' });
     fs.writeFileSync(path.join(tmpDir, 'shared.md'), 'Native draft.');

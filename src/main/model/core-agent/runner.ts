@@ -782,7 +782,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
           const error = writeError === 'conflict'
             ? 'conflict: project instructions changed after this turn started; retry in a new turn with the latest content'
             : writeError;
-          return { ok: false, error };
+          return { ...r, ok: false, error };
         },
       }));
     }

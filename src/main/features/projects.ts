@@ -55,6 +55,7 @@ import * as autoTasks from './auto_tasks';
 import { readState } from './group_chat/state';
 import { purgeProjectWorkspace } from './user_workspace';
 import { limitNameDisplayText } from '../util/name-limit';
+import { PROJECT_INSTRUCTIONS_CHAR_LIMIT } from '../../../bin/project-instructions-contract.cjs';
 
 const log = createLogger('projects');
 
@@ -460,7 +461,7 @@ export async function renameProjectForUser(uid: string, projectId: string, name:
 // and named project actors can replace it via `project_instructions` using
 // the conditional writer.
 
-export const PROJECT_INSTRUCTIONS_CHAR_LIMIT = 4000;
+export { PROJECT_INSTRUCTIONS_CHAR_LIMIT };
 
 /** Static conflict core shared by every project-aware model surface. */
 export function formatProjectContextCoreForPrompt(): string {
@@ -512,8 +513,10 @@ export async function writeProjectInstructions(
   uid: string,
   projectId: string,
   content: string,
-): Promise<{ ok: true } | { ok: false; error: ProjectError }> {
-  if (content.length > PROJECT_INSTRUCTIONS_CHAR_LIMIT) return { ok: false, error: 'too_long' };
+): Promise<{ ok: true } | { ok: false; error: ProjectError; limit?: number; actual?: number }> {
+  if (content.length > PROJECT_INSTRUCTIONS_CHAR_LIMIT) {
+    return { ok: false, error: 'too_long', limit: PROJECT_INSTRUCTIONS_CHAR_LIMIT, actual: content.length };
+  }
   return withProjectInstructionsMutationLock(uid, projectId, async () => {
     const cur = await _readProject(uid, projectId);
     if (!cur) return { ok: false, error: 'not_found' };
@@ -541,8 +544,10 @@ export async function writeProjectInstructionsIfUnchanged(
   projectId: string,
   expectedContent: string,
   content: string,
-): Promise<{ ok: true } | { ok: false; error: ProjectInstructionsConditionalWriteError }> {
-  if (content.length > PROJECT_INSTRUCTIONS_CHAR_LIMIT) return { ok: false, error: 'too_long' };
+): Promise<{ ok: true } | { ok: false; error: ProjectInstructionsConditionalWriteError; limit?: number; actual?: number }> {
+  if (content.length > PROJECT_INSTRUCTIONS_CHAR_LIMIT) {
+    return { ok: false, error: 'too_long', limit: PROJECT_INSTRUCTIONS_CHAR_LIMIT, actual: content.length };
+  }
   return withProjectInstructionsMutationLock(uid, projectId, async () => {
     const cur = await _readProject(uid, projectId);
     if (!cur) return { ok: false, error: 'not_found' };

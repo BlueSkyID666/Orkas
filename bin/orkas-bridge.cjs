@@ -36,6 +36,7 @@
 'use strict';
 
 const { defaultNumericRange } = require('./tool-input-compat.cjs');
+const { PROJECT_INSTRUCTIONS_TEXT_DESCRIPTION } = require('./project-instructions-contract.cjs');
 
 const path = require('node:path');
 const fs = require('node:fs');
@@ -524,7 +525,8 @@ function createServer() {
     server.registerTool('project_instructions', ...bridgeToolInput(
       z,
       'Replace the current project standing instructions with the complete text. Preserve applicable existing rules; concurrent changes return a conflict.',
-      { instructions: z.string().min(1).max(4000).describe('Complete replacement goal and rules text.') },
+      // The host enforces UTF-16 length and returns limit/actual without clipping.
+      { instructions: z.string().min(1).describe(PROJECT_INSTRUCTIONS_TEXT_DESCRIPTION) },
       async (params) => {
         try { return projectWriteResult(await rpc('project_instructions', params)); }
         catch (err) { return errorResult(err); }
