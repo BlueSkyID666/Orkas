@@ -11046,3 +11046,87 @@ describe('streaming repaint lifecycle', () => {
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
 });
+
+describe('selected Agent ordinary send completion', () => {
+  it('refreshes public Agent statistics without adding routing metadata to the model request', async () => {
+    const context = loadConversationRenderer();
+    const events = new EventTarget();
+    context.window.addEventListener = events.addEventListener.bind(events);
+    context.window.dispatchEvent = events.dispatchEvent.bind(events);
+    context.CustomEvent = CustomEvent;
+    context.window.orkas = { invoke: vi.fn() };
+    context._isCommanderAgent = (id: string) => id === 'commander';
+    context._isAgentProfileMock = () => false;
+    context._selectedAgent = null;
+    context._agentEditing = false;
+    let displayedDeliveries = 2;
+    context.loadAgents = vi.fn(async () => { displayedDeliveries = 3; });
+    const agentSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/agents.js'), 'utf8');
+    vm.runInContext(agentSource.slice(
+      agentSource.indexOf('async function _refreshAgentRuntimeStatsAfterRun('),
+      agentSource.indexOf('function _agentDeliveryCount('),
+    ), context);
+    context.performance = performance;
+    context.currentCid = 'c1';
+    context._agentsCache = [{ agent_id: 'writer', name: 'Writer' }];
+    context.setChatRecipient('conversation', { kind: 'agent', id: 'writer', name: 'Writer' });
+    const input = { value: 'review this', dataset: {}, dispatchEvent() {} };
+    context.document.getElementById = (id: string) => id === 'chat-input' ? input : null;
+    context.ensureModelConfigured = () => true;
+    context.transformWithChatUse = (text: string) => text;
+    context._chatAttachSnapshotForSend = async () => ({ ok: true, items: [], names: [] });
+    context._clearDraft = () => {};
+    context.autoGrow = () => {};
+    const sent: any[] = [];
+    context._makeConvChatController = (_cid: string, options: any) => ({
+      async send(content: string, extra: any) {
+        sent.push({ content, extra });
+        options.onStarted();
+        const terminal = { started: true, aborted: false, errored: false, accepted: true };
+        options.onDone(terminal);
+        return terminal;
+      },
+    });
+    await context.handleChatSubmit();
+    await Promise.resolve();
+    // The selected existing floor stays in main; ordinary follow-ups keep their text unchanged.
+    expect(sent).toEqual([{ content: 'review this', extra: undefined }]);
+    expect(context.loadAgents).toHaveBeenCalledExactlyOnceWith(true);
+    expect(displayedDeliveries).toBe(3);
+    expect(input.value).toBe('');
+  });
+});
+
+describe('preflight send controller ownership', () => {
+  it('keeps the newer active controller when an earlier no-start result settles', async () => {
+    const context = loadConversationRenderer();
+    context.performance = performance;
+    const newerResult = Promise.withResolvers<any>();
+    let number = 0;
+    let newer: any;
+    context._makeConvChatController = (_cid: string, options: any) => {
+      const ordinal = ++number;
+      const controller = {
+        abort: vi.fn(),
+        async send() {
+          if (ordinal === 1) return { started: false, reason: 'model_not_configured' };
+          options.onStarted();
+          return newerResult.promise;
+        },
+      };
+      if (ordinal === 2) newer = controller;
+      return controller;
+    };
+    // Both calls reach the public send entry before the resolved preflight
+    // result's await resumes. The second now owns the same conversation.
+    const rejected = context.sendInConversation('c1', 'earlier attempt');
+    const active = context.sendInConversation('c1', 'new attempt');
+    const first = await rejected;
+    expect(first.started).toBe(false);
+    expect(first.result).toBe('failure');
+    expect(vm.runInContext('_convChatCtrls.get("c1")', context)).toBe(newer);
+    expect(newer.abort).not.toHaveBeenCalled();
+    newerResult.resolve({ started: true, aborted: false, errored: false, accepted: true });
+    expect((await active).result).toBe('success');
+  });
+});

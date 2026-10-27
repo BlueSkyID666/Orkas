@@ -116,3 +116,59 @@ describe('new chat home surface', () => {
     expect(css).toMatch(/\.chat-rich-editor:empty::before\s*{[\s\S]*?content:\s*attr\(data-placeholder\);/);
   });
 });
+
+describe('home locale changes', () => {
+  it('repaints the public greeting/cards and keeps the replacement card clickable', async () => {
+    const ts = await import('typescript');
+    const source = read('src/renderer/modules/conversation.js');
+    const ast = ts.createSourceFile('conversation.js', source, ts.ScriptTarget.Latest, true);
+    const names = new Set(['_quickStartText', '_renderEmptyStateHeading', '_renderQuickStartScenarios', '_bindEmptyStateScenarioButtons']);
+    const publicFunctions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.has(node.name?.text || '')).map(node => node.getText(ast));
+    const localeListeners = ast.statements.filter(node => ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)
+      && node.expression.expression.getText(ast) === 'window.addEventListener'
+      && node.expression.arguments[0]?.getText(ast) === "'i18n-change'"
+      && node.expression.arguments[1]?.getText(ast).includes('_renderQuickStartScenarios(')).map(node => node.getText(ast));
+    const windowEvents = new EventTarget();
+    let lang = 'en';
+    let card: (EventTarget & { dataset: Record<string, string> }) | null = null;
+    let markup = '';
+    const greeting = { textContent: '' };
+    const grid = {
+      get innerHTML() { return markup; },
+      set innerHTML(value: string) {
+        markup = value;
+        card = Object.assign(new EventTarget(), { dataset: { scenario: 'task' } });
+      },
+    };
+    const row = { querySelectorAll: () => card ? [card] : [] };
+    const applied: unknown[][] = [];
+    const context: any = {
+      window: windowEvents,
+      document: { getElementById: (id: string) => ({ 'new-chat-greeting': greeting, 'new-chat-scenario-grid': grid, 'new-chat-scenarios': row }[id]) },
+      _emptyStateAccountName: '', _quickStartItems: [{ id: 'task' }],
+      _SCENARIO_CONFIGS: { task: { labelKey: 'label', taskKey: 'task', deliverableKey: 'deliver', group: 'work' } },
+      escapeHtml: (value: string) => value,
+      _uiIconHtml: () => '',
+      t: (key: string, vars?: { name?: string }) => `${lang}:${key}${vars?.name ? ':' + vars.name : ''}`,
+      _applyQuickStartScenario: (...args: unknown[]) => applied.push(args),
+    };
+    vm.createContext(context);
+    vm.runInContext([...publicFunctions, ...localeListeners].join('\n'), context);
+    context._renderEmptyStateHeading();
+    context._renderQuickStartScenarios();
+    context._bindEmptyStateScenarioButtons(row);
+    expect(greeting.textContent).toBe('en:new_chat.title:en:common.user_fallback');
+    expect(markup).toContain('en:task');
+    card!.dispatchEvent(new Event('click'));
+    expect(applied).toEqual([['task', 1, { surface: 'home_grid' }]]);
+    const originalCard = card;
+    lang = 'zh';
+    windowEvents.dispatchEvent(new Event('i18n-change'));
+    expect(greeting.textContent).toBe('zh:new_chat.title:zh:common.user_fallback');
+    expect(markup).toContain('zh:task');
+    expect(markup).not.toContain('en:task');
+    expect(card).not.toBe(originalCard);
+    card!.dispatchEvent(new Event('click'));
+    expect(applied).toEqual([['task', 1, { surface: 'home_grid' }], ['task', 1, { surface: 'home_grid' }]]);
+  });
+});

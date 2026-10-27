@@ -2812,6 +2812,14 @@ function _initEmptyStateScenarios() {
   _bindEmptyStateScenarioButtons(row);
   _refreshQuickStartConfig(row);
 }
+window.addEventListener('i18n-change', () => {
+  const row = document.getElementById('new-chat-scenarios');
+  if (!row) return;
+  _renderEmptyStateHeading();
+  _renderQuickStartScenarios();
+  _bindEmptyStateScenarioButtons(row);
+});
+
 function onEnterConversationView() {
   if (_messageSelectionState && _messageSelectionState.cid !== currentCid) _exitMessageSelection();
   _renderRecipientChip('conversation');
@@ -10801,6 +10809,7 @@ function _syncMessageSelectionUi() {
     const wrapper = pane.querySelector('.chat-input-wrapper');
     wrapper.insertBefore(bar, wrapper.querySelector('.chat-input-area'));
     bar.querySelector('[data-selection-cancel]').addEventListener('click', _exitMessageSelection);
+    bar.querySelector('[data-selection-all]').addEventListener('click', _toggleAllMessageSelection);
     bar.querySelector('[data-selection-reference]').addEventListener('click', async () => {
       const payloads = await _prepareSelectedMessagePayloads();
       if (payloads) _openReferenceTargetPicker(payloads.map(payload => payload.reference).filter(Boolean));
@@ -11364,6 +11373,9 @@ async function handleChatSubmit() {
     const recipientSnapshot = _recipientSnapshotForSend('conversation');
     const commanderDisplay = _commanderMentionDisplayForSend(requestText, recipientSnapshot);
     const content = transformWithChatUse(_applyRecipientPrefixWithSnapshot(requestText, recipientSnapshot));
+    const runRecipient = recipientSnapshot.defaultRecipient || recipientSnapshot;
+    const agentRunOptions = runRecipient.kind === 'agent' && runRecipient.id
+      ? { agent_id: runRecipient.id } : {};
 
     const clearSubmittedComposer = () => {
       const ownsVisibleDraft = currentCid === cid && submittedDraft.matches();
@@ -11494,6 +11506,7 @@ async function handleChatSubmit() {
       restoreComposerOnFailure: true,
       source_view: 'conversation',
       background: cid !== currentCid,
+      ...agentRunOptions,
       content_length: requestText.length,
     });
   } finally {
@@ -11788,8 +11801,8 @@ async function sendInConversation(cid, content, extra, options = {}) {
     // snapshot intact.
     if (!started && typeof _clearSentComposerSnapshot === 'function') {
       _clearSentComposerSnapshot(cid);
-      _convChatCtrls.delete(cid);
     }
+    if (!started && _convChatCtrls.get(cid) === ctrl) _convChatCtrls.delete(cid);
     return { ...terminal, started, aborted, errored, result };
   } catch (err) {
     if (agentId) {
