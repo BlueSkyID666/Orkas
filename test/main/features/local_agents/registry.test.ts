@@ -584,7 +584,9 @@ describe('local_agents/registry', () => {
   it('discovers the official OpenCode install without shell PATH and preserves an explicit missing pin', async () => {
     process.env.PATH = '';
     const bin = writeMockCli(path.join(process.env.HOME!, '.opencode', 'bin', 'opencode'), MIN_VERSIONS.opencode);
-    expect(await detectOne('opencode')).toMatchObject({ available: true, path: bin, version: MIN_VERSIONS.opencode });
+    const detected = await detectOne('opencode');
+    expect(detected).toMatchObject({ available: true, version: MIN_VERSIONS.opencode });
+    expect(isWindows ? detected.path?.toLowerCase() : detected.path).toBe(isWindows ? bin.toLowerCase() : bin);
     process.env.ORKAS_OPENCODE_PATH = path.join(tmpDir, 'missing-pinned-opencode');
     expect(await detectOne('opencode')).toMatchObject({ available: false, path: null, error: 'not_found' });
   });

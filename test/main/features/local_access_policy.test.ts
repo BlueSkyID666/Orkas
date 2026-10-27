@@ -387,7 +387,10 @@ describe('complete public material proof', () => {
         if (fault === 'fstat') return fail();
         const original = originalStat(fd);
         const field = fault === 'changed-inode' ? 'ino' : fault === 'changed-device' ? 'dev' : 'size';
-        return { ...original, [field]: Number(original[field]) + 1 };
+        // NTFS inode numbers can exceed Number.MAX_SAFE_INTEGER; adding one
+        // may leave the value unchanged and fail to inject the intended race.
+        const changed = Number(original[field]) === 0 ? 1 : 0;
+        return { ...original, [field]: changed };
       }) as typeof fs.fstatSync);
       syncBuiltinESMExports();
       try {
