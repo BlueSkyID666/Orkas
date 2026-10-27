@@ -465,6 +465,38 @@ export function applyConnectorArgDefaults(
       delete out[camel];
     }
   }
+  if (
+    connectorId === 'gmail'
+    && toolName.startsWith('GMAIL_')
+    && Object.prototype.hasOwnProperty.call(properties, 'user_id')
+    && !Object.prototype.hasOwnProperty.call(out, 'user_id')
+  ) {
+    out.user_id = 'me';
+  }
+  if (connectorId === 'gmail' && toolName === 'GMAIL_FETCH_EMAILS') {
+    if (
+      Object.prototype.hasOwnProperty.call(properties, 'verbose')
+      && !Object.prototype.hasOwnProperty.call(out, 'verbose')
+    ) {
+      out.verbose = false;
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(properties, 'include_payload')
+      && !Object.prototype.hasOwnProperty.call(out, 'include_payload')
+    ) {
+      out.include_payload = false;
+    }
+  }
+  if (connectorId === 'gmail' && toolName.startsWith('GMAIL_')) {
+    const hasBody = Object.prototype.hasOwnProperty.call(out, 'body');
+    const hasMessageBody = Object.prototype.hasOwnProperty.call(out, 'message_body');
+    if (hasBody && !hasMessageBody && Object.prototype.hasOwnProperty.call(properties, 'message_body')) {
+      out.message_body = out.body;
+    }
+    if (hasMessageBody && !hasBody && Object.prototype.hasOwnProperty.call(properties, 'body')) {
+      out.body = out.message_body;
+    }
+  }
   return out;
 }
 

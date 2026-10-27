@@ -952,6 +952,57 @@ describe('named-Agent Connector fallback model loop', () => {
 // ── call_connector_tool ─────────────────────────────────────────────────
 
 describe('call_connector_tool', () => {
+  it('sends bounded schema-declared Gmail fetch defaults through the authorized call', async () => {
+    fixtures.instances = [makeInstance({ id: 'gmail', tools: [{
+      name: 'GMAIL_FETCH_EMAILS', description: 'Read mail.', input_schema: {
+        type: 'object', properties: { user_id: { type: 'string' }, verbose: { type: 'boolean' }, include_payload: { type: 'boolean' } },
+      },
+    }] })];
+    const execute = vi.fn(async () => 'mail results');
+    fixtures.callTool = execute;
+    const { createConnectorMetaTools } = await loadModule();
+    const [, call] = await createConnectorMetaTools({ userId: UID, cid: 'gmail-defaults' });
+    const args = {};
+    expect((await runTool(call, { connector_id: 'gmail', tool_name: 'GMAIL_FETCH_EMAILS', args })).isError).toBeFalsy();
+    expect(execute).toHaveBeenCalledWith(UID, 'gmail', 'GMAIL_FETCH_EMAILS', {
+      user_id: 'me', verbose: false, include_payload: false,
+    }, expect.objectContaining({ conversationId: 'gmail-defaults' }));
+    expect(args).toEqual({});
+  });
+
+  it.each([
+    { provided: 'body', declared: 'message_body' },
+    { provided: 'message_body', declared: 'body' },
+  ])('keeps Gmail send content when the action schema declares $declared', async ({ provided, declared }) => {
+    fixtures.instances = [makeInstance({ id: 'gmail', tools: [{
+      name: 'GMAIL_SEND_EMAIL', description: 'Send mail.',
+      input_schema: { type: 'object', properties: { [declared]: { type: 'string' } } },
+    }] })];
+    const execute = vi.fn(async () => 'sent');
+    fixtures.callTool = execute;
+    const { createConnectorMetaTools } = await loadModule();
+    const [, call] = await createConnectorMetaTools({ userId: UID, cid: 'gmail-body' });
+    const args = { [provided]: 'Requested message' };
+    expect((await runTool(call, { connector_id: 'gmail', tool_name: 'GMAIL_SEND_EMAIL', args })).isError).toBeFalsy();
+    expect(execute).toHaveBeenCalledWith(UID, 'gmail', 'GMAIL_SEND_EMAIL', {
+      [provided]: 'Requested message', [declared]: 'Requested message',
+    }, expect.anything());
+    expect(args).toEqual({ [provided]: 'Requested message' });
+  });
+
+  it('preserves explicit Gmail arguments and keeps defaults within the declared action contract', async () => {
+    const { applyConnectorArgDefaults: normalize } = await loadModule();
+    const schema = { properties: { user_id: {}, verbose: {}, include_payload: {}, body: {}, message_body: {} } };
+    const explicit = { user_id: '', verbose: true, include_payload: true, body: 'one', message_body: 'two' };
+    expect(normalize('gmail', 'GMAIL_FETCH_EMAILS', explicit, schema)).toEqual(explicit);
+    expect(normalize('other', 'GMAIL_FETCH_EMAILS', { body: 'one' }, schema)).toEqual({ body: 'one' });
+    expect(normalize('gmail', 'read_mail', { body: 'one' }, schema)).toEqual({ body: 'one' });
+    expect(normalize('gmail', 'GMAIL_FETCH_EMAILS', {}, { properties: {} })).toEqual({});
+    expect(normalize('gmail', 'GMAIL_SEND_EMAIL', { body: 'one' }, undefined)).toEqual({ body: 'one' });
+    expect(normalize('gmail', 'GMAIL_SEND_EMAIL', { body: '' }, { properties: { message_body: {} } }))
+      .toEqual({ body: '', message_body: '' });
+  });
+
   it('requires explicit side-effect confirmation before the model claims completion', async () => {
     fixtures.instances = [makeInstance({ id: 'notion', tools: NOTION_TOOLS })];
     const { createConnectorMetaTools } = await loadModule();
