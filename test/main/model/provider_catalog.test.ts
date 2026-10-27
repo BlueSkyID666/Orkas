@@ -142,7 +142,7 @@ describe('provider_catalog › CURATED_MODELS', () => {
     for (const row of rows.filter(m => m.id !== 'k2p7')) {
       const resolved = resolveConfiguredPiModel({ getPiModel: getBuiltinModel as any }, 'kimi-coding', row.id);
       expect(resolved).toMatchObject({ templateModelId: row.id, isConfiguredFallback: false,
-        model: { id: row.id, api: 'anthropic-messages', compat: { forceAdaptiveThinking: true } } });
+        model: { id: row.id, api: 'openai-completions', baseUrl: 'https://api.kimi.com/coding/v1', compat: { requiresReasoningContentOnAssistantMessages: true } } });
     }
     expect(isSelectableModel('kimi-coding', 'k2p7')).toBe(true);
     expect(resolveModelUpgrade('kimi-coding', 'k2p7')).toMatchObject({ modelId: 'k2p7', upgraded: false });
@@ -162,13 +162,14 @@ describe('provider_catalog › CURATED_MODELS', () => {
       isConfiguredFallback: false,
       needsCustomModel: true,
       model: {
-        api: 'anthropic-messages',
+        api: 'openai-completions',
+        baseUrl: 'https://api.kimi.com/coding/v1',
         reasoning: true,
         contextWindow: 1_000_000,
         maxTokens: 131_072,
         compat: {
-          allowEmptySignature: true,
-          forceAdaptiveThinking: true,
+          requiresReasoningContentOnAssistantMessages: true,
+          supportsReasoningEffort: true,
         },
       },
     });
@@ -177,6 +178,7 @@ describe('provider_catalog › CURATED_MODELS', () => {
   it('minimax catalog exposes M3 before the M2.7 generation', () => {
     const directIds = (CURATED_MODELS['minimax-cn'] || []).map((m) => m.id);
     expect(directIds).toEqual([
+      'MiniMax-M3.1-Flash',
       'MiniMax-M3',
       'MiniMax-M2.7',
     ]);
@@ -186,6 +188,44 @@ describe('provider_catalog › CURATED_MODELS', () => {
 
     const portalIds = (CURATED_MODELS['minimax-portal-cn'] || []).map((m) => m.id);
     expect(portalIds).toEqual(directIds);
+    for (const provider of ['minimax-cn', 'minimax-portal', 'minimax-portal-cn']) {
+      expect(curatedModelsFor(provider).filter(m => !m.hiddenFromPicker).map(m => m.id))
+        .toEqual(['MiniMax-M3.1-Flash', 'MiniMax-M3']);
+      expect(resolveModelUpgrade(provider, 'MiniMax-M2.7').modelId).toBe('MiniMax-M2.7');
+      expect(isSelectableModel(provider, 'MiniMax-M2.7')).toBe(true);
+    }
+  });
+
+  it.each(['minimax-cn', 'minimax-portal', 'minimax-portal-cn'])('runs new Flash through %s with its own protocol metadata', async (providerId) => {
+    const catalog = { getPiModel: (provider: string, id: string) => id === 'MiniMax-M3.1-Flash' ? undefined : (getBuiltinModel as any)(provider, id) };
+    const original = structuredClone(catalog.getPiModel(providerId === 'minimax-portal' ? 'minimax' : 'minimax-cn', 'MiniMax-M3'));
+    const resolved = resolveConfiguredPiModel(catalog, providerId, 'MiniMax-M3.1-Flash');
+    expect(resolved).not.toBeNull();
+    expect(resolved!.model).toMatchObject({ id: 'MiniMax-M3.1-Flash', api: 'anthropic-messages',
+      baseUrl: providerId === 'minimax-portal' ? 'https://api.minimax.io/anthropic' : 'https://api.minimaxi.com/anthropic',
+      contextWindow: 1_000_000, maxTokens: 131072, reasoning: true, input: ['text', 'image'],
+      cost: { input: 0.15, output: 0.6, cacheRead: 0.015, cacheWrite: 0 },
+    });
+    expect(resolved!.model.cost).not.toHaveProperty('tiers');
+    const { createPiProvider } = await import('#core-agent');
+    for (const reasoning of [undefined, 'off', 'low', 'high'] as const) {
+      let payload: any;
+      const provider = createPiProvider({ provider: providerId, apiKey: 'fixture-only', customModel: resolved!.model,
+        onPayload(value) { payload = value; throw new Error('captured-before-transport'); } });
+      await expect(provider.complete({ model: 'MiniMax-M3.1-Flash', reasoning, temperature: 0.25,
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'Answer' }] }], onRequestFailure() {},
+      })).rejects.toThrow('captured-before-transport');
+      expect(payload.model).toBe('MiniMax-M3.1-Flash');
+      expect(payload.thinking?.type).not.toBe('disabled');
+      expect(payload).not.toHaveProperty('temperature');
+      expect(payload).not.toHaveProperty('service_tier');
+      if (reasoning && reasoning !== 'off') {
+        expect(payload.thinking).toMatchObject({ type: 'adaptive' });
+        expect(payload.thinking).not.toHaveProperty('budget_tokens');
+        expect(payload.output_config.effort).toBe(reasoning);
+      }
+    }
+    expect(catalog.getPiModel(providerId === 'minimax-portal' ? 'minimax' : 'minimax-cn', 'MiniMax-M3')).toEqual(original);
   });
 
   it('exposes GLM 5.3 and 5.2 as native runnable Z.AI models', () => {

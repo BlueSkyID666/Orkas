@@ -102,7 +102,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   // Moonshot has two independently-billed endpoints:
   //   - `moonshot` → https://api.moonshot.cn/v1 (OpenAI-compatible,
   //     pay-as-you-go open platform).
-  //   - `kimi-coding` → https://api.kimi.com/coding (Anthropic protocol,
+  //   - `kimi-coding` → https://api.kimi.com/coding/v1 (OpenAI-compatible,
   //     monthly subscription for Kimi Coding only).
   // Both bind to the same Moonshot account but have separate auth and
   // quota — a single key cannot be used on both. The UI shows them as
@@ -383,6 +383,23 @@ function cloneModelWithId(
   return applyConfiguredModelOverrides(cloned, overrides);
 }
 
+/** Temporary metadata for the official Flash id until pi-ai includes it.
+ * M3 supplies the regional transport and input limits, not Flash's pricing or
+ * thinking controls. Exact future SDK entries bypass this fallback.
+ * https://platform.minimax.io/docs/api-reference/text-anthropic-api
+ */
+function applyMinimaxFlashFallback(model: Model<Api>, providerId: string): Model<Api> {
+  if (!['minimax-cn', 'minimax-portal', 'minimax-portal-cn'].includes(providerId)
+    || model.id !== 'MiniMax-M3.1-Flash' || model.api !== 'anthropic-messages') return model;
+  return {
+    ...model,
+    reasoning: true,
+    cost: { input: 0.15, output: 0.6, cacheRead: 0.015, cacheWrite: 0 },
+    thinkingLevelMap: { off: null, minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
+    compat: { ...model.compat, forceAdaptiveThinking: true, supportsTemperature: false },
+  };
+}
+
 function hasConfiguredModelOverrides(configured: ProviderModelEntry | undefined): boolean {
   return !!configured
     && (
@@ -489,7 +506,7 @@ export function resolveConfiguredPiModel(
         || PI_MODEL_TEMPLATE_ALIAS_LABEL[requestedProviderId]?.[requestedModelId]
         || requestedModelId;
       return {
-        model: cloneModelWithId(template, requestedModelId, name, configured),
+        model: applyMinimaxFlashFallback(cloneModelWithId(template, requestedModelId, name, configured), requestedProviderId),
         requestedProviderId,
         requestedModelId,
         catalogProviderId,

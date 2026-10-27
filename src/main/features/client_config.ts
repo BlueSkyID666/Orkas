@@ -12,7 +12,7 @@ import { getActiveUserId, hasActiveUser } from './users';
 import { userRemoteConfigFile } from '../paths';
 import { readJsonSync, writeJsonSync } from '../storage';
 import { createLogger } from '../logger';
-import { fetchWithRetry } from '../util/retry';
+import { fetchAndReadWithRetry } from '../util/retry';
 import { desktopPlatform } from '../system_info';
 import { withCommonHeaders } from './api_common';
 import { DEFAULT_RETRY_ERROR_POLICY, type RetryErrorPolicyConfig } from '../../core-agent/src/shared/errors';
@@ -54,6 +54,7 @@ type ElectronPowerMonitorLike = {
 };
 
 const log = createLogger('client-config');
+const CLIENT_CONFIG_REFRESH_TIMEOUT_MS = 60_000;
 const REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
 const PROD_DEFAULT = 'https://orkas.ai/api';
 
@@ -468,7 +469,19 @@ export async function refresh(
       const { app } = runtimeApp ? { app: runtimeApp } : await loadElectronRuntime();
       const headers: Record<string, string> = withCommonHeaders();
       if (current.etag) headers['If-None-Match'] = current.etag;
-      const res = await fetchWithRetry('client-config:refresh', buildUrl(app), { method: 'GET', headers });
+      const { response: res, body: parsed } = await fetchAndReadWithRetry(
+        'client-config:refresh', buildUrl(app), { method: 'GET', headers },
+        async (response, signal) => {
+          if (!response.ok) return { ok: true, body: {} as Record<string, unknown> } as const;
+          try { return { ok: true, body: await response.json() as Record<string, unknown> } as const; }
+          catch (error) {
+            if (signal?.aborted) throw error;
+            // Keep malformed-body failures outside transport retries.
+            return { ok: false, error } as const;
+          }
+        },
+        { timeoutMs: CLIENT_CONFIG_REFRESH_TIMEOUT_MS },
+      );
       const etag = res.headers.get('etag') || '';
       if (activeConfigOwner() !== requestOwner) {
         log.info('stale client config response ignored after account switch', { reason });
@@ -480,7 +493,8 @@ export async function refresh(
         return { updated: false, notModified: true };
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = await res.json() as Record<string, unknown>;
+      if (!parsed.ok) throw parsed.error;
+      const body = parsed.body;
       if (body.code !== 0) throw new Error(String(body.msg || body.code || 'client config error'));
       return { updated: applyPayload(body, etag) };
     } catch (err) {
