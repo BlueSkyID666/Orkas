@@ -59,6 +59,7 @@
 
 import { normalizeAnthropicBaseUrl } from '../model/custom-model-url';
 import * as fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { shell } from 'electron';
 
@@ -1134,6 +1135,19 @@ export function getConfiguredModelCooldown(): {
   return best;
 }
 
+/** Read-only background gate; provider selection and cooldown policy stay unchanged. */
+export function allConfiguredModelsCooledDown(): boolean {
+  const store = loadProfiles();
+  let configured = 0;
+  for (const entry of store.entries) {
+    if (!isEntryAllowed(store, entry)) continue;
+    if (!store.profiles[entry.profileId]) continue;
+    configured += 1;
+    if (!getCooldown(entry.profileId)) return false;
+  }
+  return configured > 0;
+}
+
 export function getConfiguredModelOAuthExpiredMessage(): string | null {
   const store = loadProfiles();
   const now = Date.now();
@@ -1145,7 +1159,7 @@ export function getConfiguredModelOAuthExpiredMessage(): string | null {
       clearOAuthRefreshFailure(entry.profileId);
       continue;
     }
-    if (!oauthRefreshFailures.has(entry.profileId) && prof.refresh) continue;
+    if (!oauthRefreshFailures.has(oauthProfileKey(getActiveUserId(), entry.profileId)) && prof.refresh) continue;
     return t('errors.model_oauth_expired', { provider: providerLabel(prof.provider) });
   }
   return null;
@@ -2259,11 +2273,11 @@ async function resolveEntryApiKey(store: ProfilesFile, entry: Entry, userId: str
   try {
     const refreshed = await refreshOAuthProfile(entry.profileId, userId);
     if (!isActiveAuthOwner(userId)) return undefined;
-    if (!refreshed) rememberOAuthRefreshFailure(entry.profileId, prof);
+    if (!refreshed) rememberOAuthRefreshFailure(entry.profileId, prof, userId);
     return refreshed;
   } catch (err) {
     if (!isActiveAuthOwner(userId)) return undefined;
-    rememberOAuthRefreshFailure(entry.profileId, prof);
+    rememberOAuthRefreshFailure(entry.profileId, prof, userId);
     log.warn('OAuth refresh failed', { profileId: entry.profileId, error: logErrorSummary(err) });
     return undefined;
   }
@@ -2463,21 +2477,52 @@ export async function pickRotationKey(providerId: string): Promise<{
   return null;
 }
 
-async function refreshOAuthProfile(profileId: string, userId = getActiveUserId()): Promise<string | undefined> {
-  const store = loadProfiles({ userId });
-  const prof = store.profiles[profileId];
-  if (!prof || prof.type !== 'oauth') return undefined;
+// A rotating credential is shared by chat and connection probes. Keep one
+// exchange per exact owner/credential; reauthorization supersedes older grants.
+const oauthRefreshInFlight = new Map<string, Promise<string | undefined>>();
 
+function oauthCredentialFingerprint(prof: OAuthProfile): string {
+  return createHash('sha256').update(JSON.stringify([
+    prof.provider, prof.access, prof.refresh, prof.expires,
+  ])).digest('hex');
+}
+
+function isSameOAuthCredential(target: StoredProfile | undefined, expected: OAuthProfile): target is OAuthProfile {
+  return target?.type === 'oauth'
+    && oauthCredentialFingerprint(target) === oauthCredentialFingerprint(expected);
+}
+
+function refreshOAuthProfile(profileId: string, userId = getActiveUserId()): Promise<string | undefined> {
+  if (!isActiveAuthOwner(userId)) return Promise.resolve(undefined);
+  const prof = loadProfiles({ userId }).profiles[profileId];
+  if (!prof || prof.type !== 'oauth') return Promise.resolve(undefined);
+  const key = JSON.stringify([userId, profileId, oauthCredentialFingerprint(prof)]);
+  const existing = oauthRefreshInFlight.get(key);
+  if (existing) return existing;
+  const pending = performOAuthProfileRefresh(profileId, userId, prof);
+  oauthRefreshInFlight.set(key, pending);
+  const clearPending = () => {
+    if (oauthRefreshInFlight.get(key) === pending) oauthRefreshInFlight.delete(key);
+  };
+  pending.then(clearPending, clearPending);
+  return pending;
+}
+
+async function performOAuthProfileRefresh(
+  profileId: string,
+  userId: string,
+  prof: OAuthProfile,
+): Promise<string | undefined> {
   let oauth: PiOauthModule;
   try {
     oauth = await piOauth();
   } catch (err) {
-    if (isActiveAuthOwner(userId)) rememberOAuthRefreshFailure(profileId, prof);
+    if (isActiveAuthOwner(userId)) rememberOAuthRefreshFailure(profileId, prof, userId);
     throw err;
   }
   const provider = await oauth.getOAuthProvider(prof.provider);
   if (!provider) {
-    if (isActiveAuthOwner(userId)) rememberOAuthRefreshFailure(profileId, prof);
+    if (isActiveAuthOwner(userId)) rememberOAuthRefreshFailure(profileId, prof, userId);
     return undefined;
   }
 
@@ -2491,26 +2536,29 @@ async function refreshOAuthProfile(profileId: string, userId = getActiveUserId()
       ),
     ),
   };
+  if (!isActiveAuthOwner(userId)) return undefined;
+  if (!isSameOAuthCredential(loadProfiles({ userId }).profiles[profileId], prof)) return undefined;
   let newCreds: any;
   try {
     newCreds = await provider.refreshToken(creds as any);
   } catch (err) {
-    if (isActiveAuthOwner(userId)) rememberOAuthRefreshFailure(profileId, prof);
+    if (isActiveAuthOwner(userId)) rememberOAuthRefreshFailure(profileId, prof, userId);
     throw err;
   }
   const fresh = loadProfiles({ throwOnInvalidExisting: true, userId });
   const target = fresh.profiles[profileId];
-  if (target && target.type === 'oauth') {
-    target.access = newCreds.access;
-    target.refresh = newCreds.refresh;
-    target.expires = newCreds.expires;
-    for (const [k, v] of Object.entries(newCreds)) {
-      if (!['access', 'refresh', 'expires'].includes(k)) {
-        (target as OAuthProfile)[k] = v;
-      }
+  // An admitted rotating grant still settles only to its original owner.
+  // Removal or reauthorization must not be undone by its delayed response.
+  if (!isSameOAuthCredential(target, prof)) return undefined;
+  target.access = newCreds.access;
+  target.refresh = newCreds.refresh;
+  target.expires = newCreds.expires;
+  for (const [k, v] of Object.entries(newCreds)) {
+    if (!['access', 'refresh', 'expires'].includes(k)) {
+      target[k] = v;
     }
-    saveProfiles(fresh, userId);
   }
+  saveProfiles(fresh, userId);
   if (isActiveAuthOwner(userId)) clearOAuthRefreshFailure(profileId);
   return provider.getApiKey(newCreds);
 }
@@ -2692,10 +2740,15 @@ export const saveApiKey = (providerId: string, apiKey: string, label?: string) =
   addApiKey(providerId, apiKey, label);
 
 const oauthRefreshFailures = new Set<string>();
-function rememberOAuthRefreshFailure(profileId: string, prof: OAuthProfile): void {
-  if (!profileId || Date.now() < prof.expires) return;
-  oauthRefreshFailures.add(profileId);
+function oauthProfileKey(userId: string, profileId: string): string {
+  return JSON.stringify([userId, profileId]);
 }
-function clearOAuthRefreshFailure(profileId: string): void {
-  if (profileId) oauthRefreshFailures.delete(profileId);
+function rememberOAuthRefreshFailure(profileId: string, prof: OAuthProfile, userId = getActiveUserId()): void {
+  if (!profileId || Date.now() < prof.expires) return;
+  // A superseded grant is not a failed attempt for its replacement credential.
+  if (!isSameOAuthCredential(loadProfiles({ userId }).profiles[profileId], prof)) return;
+  oauthRefreshFailures.add(oauthProfileKey(userId, profileId));
+}
+function clearOAuthRefreshFailure(profileId: string, userId = getActiveUserId()): void {
+  if (profileId) oauthRefreshFailures.delete(oauthProfileKey(userId, profileId));
 }

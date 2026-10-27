@@ -1114,6 +1114,52 @@ describe('auth › pickChatEntryGroup + 冷却联动', () => {
   });
 });
 
+describe('auth › background model cooldown availability', () => {
+  it('leaves an unconfigured store to the normal runner gate', async () => {
+    const auth = await import('../../../src/main/features/auth');
+    expect(auth.allConfiguredModelsCooledDown()).toBe(false);
+  });
+
+  it('reports all configured API-key entries cooling down without mutating credentials', async () => {
+    const auth = await import('../../../src/main/features/auth');
+    const cooldown = await import('../../../src/main/model/core-agent/profile-cooldown');
+    const first = await auth.addApiKeyEntry('anthropic', 'claude-opus-4-8', 'fixture-first-key-xxxxxxxx', 'first');
+    const second = await auth.addApiKeyEntry('openai', 'gpt-5.5', 'fixture-second-key-xxxxxxxx', 'second');
+    cooldown.markCooldown(first.profileId, 'rate_limit', 'fixture 429');
+    cooldown.markCooldown(second.profileId, 'auth', 'fixture 401');
+    const paths = await import('../../../src/main/paths');
+    const file = paths.userAuthProfilesFile(TEST_UID);
+    const original = fs.readFileSync(file);
+    expect(auth.allConfiguredModelsCooledDown()).toBe(true);
+    expect(fs.readFileSync(file)).toEqual(original);
+  });
+
+  it('keeps the cycle usable when one API-key entry is not cooling down', async () => {
+    const auth = await import('../../../src/main/features/auth');
+    const cooldown = await import('../../../src/main/model/core-agent/profile-cooldown');
+    const first = await auth.addApiKeyEntry('anthropic', 'claude-opus-4-8', 'fixture-first-key-xxxxxxxx', 'first');
+    const second = await auth.addApiKeyEntry('openai', 'gpt-5.5', 'fixture-second-key-xxxxxxxx', 'second');
+    cooldown.markCooldown(first.profileId, 'balance', 'fixture 402');
+    expect(auth.allConfiguredModelsCooledDown()).toBe(false);
+    cooldown.markCooldown(second.profileId, 'permission', 'fixture 403');
+    expect(auth.allConfiguredModelsCooledDown()).toBe(true);
+    cooldown.clearCooldown(first.profileId);
+    expect(auth.allConfiguredModelsCooledDown()).toBe(false);
+  });
+
+  it('ignores disabled entries rather than treating them as usable fallback', async () => {
+    const auth = await import('../../../src/main/features/auth');
+    const cooldown = await import('../../../src/main/model/core-agent/profile-cooldown');
+    const allowed = await auth.addApiKeyEntry('anthropic', 'claude-opus-4-8', 'fixture-allowed-key-xxxxxxxx', 'allowed');
+    await auth.addApiKeyEntry('deepseek', 'deepseek-v4-flash', 'fixture-disabled-key-xxxxxxxx', 'disabled');
+    cooldown.markCooldown(allowed.profileId, 'auth', 'fixture 401');
+    await setDeepSeekEnabled(false);
+    expect(auth.allConfiguredModelsCooledDown()).toBe(true);
+    await setDeepSeekEnabled(true);
+    expect(auth.allConfiguredModelsCooledDown()).toBe(false);
+  });
+});
+
 describe('auth › hasConfiguredModel', () => {
   it('reports not-configured on a fresh store', async () => {
     const a = await import('../../../src/main/features/auth');
@@ -1844,6 +1890,186 @@ describe('auth › OAuth login ownership and cancellation', () => {
   });
 });
 
+
+describe('auth › rotating OAuth credential ownership', () => {
+  async function fixture() {
+    const grants: Array<{ resolve: (value: any) => void; reject: (error: Error) => void }> = [];
+    const refreshToken = vi.fn(() => new Promise<any>((resolve, reject) => grants.push({ resolve, reject })));
+    const provider = { id: 'openai-codex', name: 'Controlled OAuth fixture', refreshToken, getApiKey: (value: any) => value.access };
+    const lookup = vi.fn(() => provider);
+    vi.doMock('@earendil-works/pi-ai/oauth', () => ({
+      getOAuthProvider: lookup, getOAuthProviders: () => [provider], registerOAuthProvider: vi.fn(),
+    }));
+    const auth = await import('../../../src/main/features/auth');
+    const paths = await import('../../../src/main/paths');
+    const secrets = await import('../../../src/main/util/local-secret-store');
+    const file = paths.userAuthProfilesFile(TEST_UID);
+    const write = async (access: string, refresh: string, expires = Date.now() - 1000) => {
+      await writeExpiredOAuthEntry({
+        providerId: provider.id, model: 'gpt-5.6-sol', access, refresh, expires,
+      });
+      // The legacy v4 fixture is normalized by the real public reader before
+      // capturing exact replacement bytes; migration is not a stale-grant write.
+      expect(auth.hasConfiguredModel()).toEqual({ configured: true });
+    };
+    await write('fixture-original-access', 'fixture-original-refresh');
+    const read = () => JSON.parse(secrets.decryptLocalSecret({ namespace: 'auth.profiles', ownerId: TEST_UID, recordId: 'auth-profiles.json' }, fs.readFileSync(file, 'utf8')));
+    const next = (access: string) => ({ access, refresh: access + '-refresh', expires: Date.now() + 3_600_000 });
+    return { auth, file, write, read, next, grants, refreshToken, lookup, provider };
+  }
+
+  it('coalesces concurrent refreshes for the same credential into one grant', async () => {
+    const f = await fixture();
+    const first = f.auth.pickRotationKey('openai-codex');
+    const second = f.auth.pickRotationKey('openai-codex');
+    try {
+      await vi.waitFor(() => expect(f.grants.length).toBeGreaterThan(0));
+      const credentials = f.next('fixture-rotated');
+      for (const grant of f.grants) grant.resolve(credentials);
+      const results = await Promise.all([first, second]);
+      expect(f.refreshToken).toHaveBeenCalledOnce();
+      expect(results.map(result => result?.apiKey)).toEqual([credentials.access, credentials.access]);
+      expect(f.read().profiles['openai-codex:default']).toMatchObject(credentials);
+    } finally {
+      for (const grant of f.grants) grant.resolve(f.next('fixture-cleanup'));
+      await Promise.all([first, second]);
+    }
+  });
+
+  it.each(['reauthorize', 'remove'] as const)('does not let an admitted old grant overwrite %s', async action => {
+    const f = await fixture();
+    const pending = f.auth.pickRotationKey('openai-codex');
+    try {
+      await vi.waitFor(() => expect(f.grants).toHaveLength(1));
+      if (action === 'remove') await f.auth.removeCredential('openai-codex:default');
+      else await f.write('fixture-reauthorized', 'fixture-reauthorized-refresh', Date.now() + 3_600_000);
+      const expected = fs.readFileSync(f.file);
+      f.grants[0].resolve(f.next('fixture-obsolete-grant'));
+      expect(await pending).toBeNull();
+      expect(fs.readFileSync(f.file)).toEqual(expected);
+    } finally { f.grants[0]?.resolve(f.next('fixture-cleanup')); await pending; }
+  });
+
+  it('does not start a grant when provider discovery finds a superseded credential', async () => {
+    const f = await fixture();
+    let release!: () => void;
+    let entered = false;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    f.lookup.mockImplementation((async () => { entered = true; await gate; return f.provider; }) as any);
+    const pending = f.auth.pickRotationKey('openai-codex');
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true));
+      await f.write('fixture-new-login', 'fixture-new-refresh');
+      const expected = fs.readFileSync(f.file);
+      // An eager resolution keeps the unfixed path bounded while preserving
+      // the independent oracle that it must never invoke refreshToken.
+      f.refreshToken.mockResolvedValue(f.next('fixture-obsolete-grant'));
+      release();
+      expect(await pending).toBeNull();
+      expect(f.refreshToken).not.toHaveBeenCalled();
+      expect(fs.readFileSync(f.file)).toEqual(expected);
+    } finally { release(); await pending; }
+  });
+
+  it('keeps a newer credential grant pending after the obsolete grant settles', async () => {
+    const f = await fixture();
+    const first = f.auth.pickRotationKey('openai-codex');
+    let second: ReturnType<typeof f.auth.pickRotationKey> | undefined;
+    let third: ReturnType<typeof f.auth.pickRotationKey> | undefined;
+    try {
+      await vi.waitFor(() => expect(f.grants).toHaveLength(1));
+      await f.write('fixture-new-login', 'fixture-new-refresh');
+      second = f.auth.pickRotationKey('openai-codex');
+      await vi.waitFor(() => expect(f.grants).toHaveLength(2));
+      f.grants[0].resolve(f.next('fixture-obsolete-grant'));
+      const obsoleteResult = await first;
+      third = f.auth.pickRotationKey('openai-codex');
+      // Both real calls cross provider lookup microtasks before observation.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const credentials = f.next('fixture-current-grant');
+      for (const grant of f.grants.slice(1)) grant.resolve(credentials);
+      const results = await Promise.all([second, third]);
+      expect(obsoleteResult).toBeNull();
+      expect(f.refreshToken).toHaveBeenCalledTimes(2);
+      expect(results.map(result => result?.apiKey)).toEqual([credentials.access, credentials.access]);
+      expect(f.read().profiles['openai-codex:default']).toMatchObject(credentials);
+    } finally {
+      for (const grant of f.grants) grant.resolve(f.next('fixture-cleanup'));
+      await Promise.all([first, second, third]);
+    }
+  });
+
+  it('keeps failure hints private to the account that attempted refresh', async () => {
+    const f = await fixture();
+    const pending = f.auth.pickRotationKey('openai-codex');
+    await vi.waitFor(() => expect(f.grants).toHaveLength(1));
+    f.grants[0].reject(new Error('controlled owner A failure'));
+    expect(await pending).toBeNull();
+    expect(f.auth.getConfiguredModelOAuthExpiredMessage()).toBeTruthy();
+    const users = await import('../../../src/main/features/users');
+    users.activateUser('oauth-hint-owner-b');
+    await writeExpiredOAuthEntry({ providerId: 'openai-codex', model: 'gpt-5.6-sol', uid: 'oauth-hint-owner-b' });
+    expect(f.auth.getConfiguredModelOAuthExpiredMessage()).toBeNull();
+  });
+
+  it('keeps the original account failure hint after another account refresh succeeds', async () => {
+    const f = await fixture();
+    const pending = f.auth.pickRotationKey('openai-codex');
+    await vi.waitFor(() => expect(f.grants).toHaveLength(1));
+    f.grants[0].reject(new Error('controlled owner A failure'));
+    expect(await pending).toBeNull();
+    const originalHint = f.auth.getConfiguredModelOAuthExpiredMessage();
+    expect(originalHint).toBeTruthy();
+    const users = await import('../../../src/main/features/users');
+    users.activateUser('oauth-hint-owner-b');
+    await writeExpiredOAuthEntry({ providerId: 'openai-codex', model: 'gpt-5.6-sol', uid: 'oauth-hint-owner-b' });
+    f.refreshToken.mockResolvedValue(f.next('fixture-owner-b-current'));
+    expect(await f.auth.pickRotationKey('openai-codex')).toMatchObject({ apiKey: 'fixture-owner-b-current' });
+    expect(f.auth.getConfiguredModelOAuthExpiredMessage()).toBeNull();
+    users.activateUser(TEST_UID);
+    expect(f.auth.getConfiguredModelOAuthExpiredMessage()).toBe(originalHint);
+  });
+
+  it('does not record an obsolete grant as a failure of replacement credentials', async () => {
+    // This case owns credential state; use a local metadata-only SDK seam.
+    vi.doMock('#core-agent', () => ({
+      getPiModel: (provider: string, model: string) => ({ id: model, provider,
+        api: 'openai-codex-responses', contextWindow: 131072, maxTokens: 32768,
+        input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }),
+    }));
+    const f = await fixture();
+    const pending = f.auth.pickChatEntryGroup();
+    try {
+      await vi.waitFor(() => expect(f.grants).toHaveLength(1));
+      await f.write('fixture-new-login', 'fixture-new-refresh');
+      f.refreshToken.mockResolvedValue(f.next('fixture-unexpected-second-grant'));
+      f.grants[0].resolve(f.next('fixture-obsolete-grant'));
+      expect(await pending).toEqual([]);
+      expect(f.refreshToken).toHaveBeenCalledOnce();
+      expect(f.read().profiles['openai-codex:default']).toMatchObject({ access: 'fixture-new-login', refresh: 'fixture-new-refresh' });
+      expect(f.auth.getConfiguredModelOAuthExpiredMessage()).toBeNull();
+    } finally { f.grants[0]?.resolve(f.next('fixture-cleanup')); await pending; }
+  });
+
+  it('releases a failed in-flight refresh so an explicit retry can succeed', async () => {
+    const f = await fixture();
+    const first = f.auth.pickRotationKey('openai-codex');
+    await vi.waitFor(() => expect(f.grants).toHaveLength(1));
+    const original = fs.readFileSync(f.file);
+    f.grants[0].reject(new Error('controlled refresh failure'));
+    expect(await first).toBeNull();
+    expect(fs.readFileSync(f.file)).toEqual(original);
+    const retry = f.auth.pickRotationKey('openai-codex');
+    try {
+      await vi.waitFor(() => expect(f.grants).toHaveLength(2));
+      const credentials = f.next('fixture-retry-success');
+      f.grants[1].resolve(credentials);
+      expect(await retry).toMatchObject({ apiKey: credentials.access });
+      expect(f.refreshToken).toHaveBeenCalledTimes(2);
+      expect(f.read().profiles['openai-codex:default']).toMatchObject(credentials);
+    } finally { f.grants[1]?.resolve(f.next('fixture-cleanup')); await retry; }
+  });
+});
 
 describe('auth › interrupted connection and rotation ownership', () => {
   const probes = ['metadata', 'refresh', 'discovery', 'factory', 'stream'].flatMap(stage => ['explicit', 'rotation'].flatMap(mode =>
