@@ -168,6 +168,16 @@ for (const [boundary, continuation] of [
       expect(after.filter(row => row.system_kind === 'reply_interrupted')).toHaveLength(1);
       const archived = after.find(row => row.system_kind === 'reply_interrupted');
       expect(archived.source_message_id).toBe(after.find(row => row.from === 'user').id);
+      const clocks = (archived.process || []).filter(item => item.event?.stream === 'runtime'
+        && ['end', 'interrupted'].includes(item.event.data?.phase));
+      expect(clocks, 'shutdown must retain the clock together with the public process').toHaveLength(1);
+      expect(clocks[0].event.data.duration_ms).toBeGreaterThan(0);
+      const reopenedPage = modelOrkas.page!;
+      await reopenedPage.locator(`#conversation-list .conv-item[data-cid="${cid}"]`).click();
+      const interruption = reopenedPage.locator('#chat-history .chat-message.assistant[data-system-kind="reply_interrupted"]');
+      await expect(interruption).toHaveCount(1);
+      await expect(interruption.locator('.stream-process-runtime')).toBeVisible();
+      await expect(interruption.locator('.stream-process-runtime')).not.toHaveText('');
       modelOrkas.clearModelToolScenario();
       modelOrkas.setModelTextReplies(['The saved evidence is available.']);
       const retried = await modelOrkas.invoke<any>('groupChat.send', {

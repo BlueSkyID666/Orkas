@@ -43,6 +43,7 @@ import { installWindowPresentationEvents } from './util/window-presentation';
 import './install-data-root.cjs';
 import { resolveCliCommand } from './features/local_agents/spawn-command';
 import { createOptionalTray } from './util/app-tray';
+import { captureWindowsShutdownProcesses } from './util/windows-shutdown-processes';
 import { desktopPlatform, osVersion, preferredSystemLanguage } from './system_info';
 import {
   hardenedWebPreferences,
@@ -190,7 +191,7 @@ void installEnvProxyDispatcher();
 import { installFetchDiag } from './model/core-agent/fetch-diag';
 installFetchDiag();
 
-import { hasActiveWork, subscribeTaskTerminals, type TaskTerminalEvent } from './features/group_chat/bus';
+import { hasActiveWork, prepareForShutdown, subscribeTaskTerminals, type TaskTerminalEvent } from './features/group_chat/bus';
 import { setFetchImplementation } from './util/retry';
 setFetchImplementation((input, init) => net.fetch(input as Parameters<typeof net.fetch>[0], init));
 
@@ -440,7 +441,10 @@ function openConversationFromTaskNotification(
 
 /** `prepareShutdown` is the work a normal quit runs in `before-quit`; exits
  *  that bypass it (`app.exit`) run it themselves. */
-function registerIpc(prepareShutdown: () => Promise<void>): void {
+function registerIpc(
+  prepareShutdown: (mode?: 'quit' | 'relaunch') => Promise<void>,
+  isShutdownQuiescent: () => boolean,
+): void {
   ipc.register();
   // Subscribe before opening the renderer. The deferred driver scheduler must
   // not determine whether foreground or early background writes are visible.
@@ -577,6 +581,11 @@ function registerIpc(prepareShutdown: () => Promise<void>): void {
     ipcMain.handle('orkas.relaunch', async () => {
       const isWindows = process.platform === 'win32';
       const script = path.join(paths.PC_ROOT, isWindows ? 'run.cmd' : 'run.sh');
+      try {
+        if (!fs.statSync(script).isFile()) throw new Error('Invalid launcher');
+      } catch {
+        throw Object.assign(new Error('Relaunch could not start'), { code: 'E_RELAUNCH_START_FAILED' });
+      }
       const resolved = isWindows
         ? resolveCliCommand(script, [], process.platform, process.env)
         : { command: 'bash', args: [script], windowsVerbatimArguments: undefined };
@@ -587,17 +596,44 @@ function registerIpc(prepareShutdown: () => Promise<void>): void {
       delete childEnv.ORKAS_WORKSPACE_ROOT;
       delete childEnv.CORE_AGENT_AUTH_DIR;
       childEnv.ORKAS_RELAUNCH_OWNER_PID = String(process.pid);
-      const child = spawn(resolved.command, resolved.args, {
-        cwd: paths.PC_ROOT,
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-        windowsVerbatimArguments: resolved.windowsVerbatimArguments,
-        env: childEnv,
+      const child = await new Promise<ReturnType<typeof spawn>>((resolve, reject) => {
+        const launcher = spawn(resolved.command, resolved.args, {
+          cwd: paths.PC_ROOT,
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+          windowsVerbatimArguments: resolved.windowsVerbatimArguments,
+          env: childEnv,
+        });
+        launcher.once('error', reject);
+        launcher.once('spawn', () => { launcher.unref(); resolve(launcher); });
+      }).catch(() => {
+        throw Object.assign(new Error('Relaunch could not start'), { code: 'E_RELAUNCH_START_FAILED' });
       });
-      child.unref();
       log.info('relaunch via shell script');
-      await prepareShutdown();
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          prepareShutdown('relaunch'),
+          new Promise<void>((resolve, reject) => {
+            // run.sh/run.cmd give this owner 15 seconds to leave. Only bound
+            // local cleanup once critical active-task archival has settled.
+            timer = setTimeout(() => {
+              let quiescent = false;
+              try { quiescent = isShutdownQuiescent(); } catch { /* unknown phase retains the app */ }
+              if (quiescent) resolve();
+              else reject(Object.assign(new Error('Active task archival failed'), {
+                code: 'E_SHUTDOWN_ARCHIVE_FAILED',
+              }));
+            }, 10_000);
+          }),
+        ]);
+      } catch (error) {
+        if (child.exitCode === null && child.signalCode === null) {
+          try { child.kill(); } catch { /* retain the original archival failure */ }
+        }
+        throw error;
+      } finally { if (timer) clearTimeout(timer); }
       app.exit(0);
       return { ok: true };
     });
@@ -1437,16 +1473,58 @@ if (!gotLock) {
 } else {
 
   const shutdown = createShutdownCoordinator({
+    captureProcesses: () => captureWindowsShutdownProcesses(),
+    quiesce: async () => {
+      await Promise.all([
+        prepareForShutdown(),
+        import('./features/local_agents/runner.js').then(runner => runner.stopBackgroundRuns('the app is quitting')),
+      ]);
+      const boot = await import('./util/boot_init');
+      boot.stopBootWork();
+      const library = await import('./features/library_corpus');
+      library.closeAllLibraryCorpora();
+    },
     localTasks: [
       { name: 'open-lifecycle', run: async () => { await openLifecycleTracking?.flushQuit(); } },
+      { name: 'connectors', run: () => connectorsFeature.shutdown() },
       { name: 'search', run: () => searchFeature.flushAll() },
-      { name: 'kb_vector', run: async () => { (await import('./features/kb_vector')).closeAllKb(); } },
-      { name: 'kb_embed', run: async () => { (await import('./features/kb_embed')).closeEmbedder(); } },
-      { name: 'image-runtime', run: async () => { (await import('./util/sharp-runtime')).closeImageRuntime(); } },
-      { name: 'office-engine', run: () => sweepOfficeResidents('quit') },
-      { name: 'web-assist-session', run: async () => { await (await import('./features/web_assist_session')).flushWebAssistSessions(); } },
+      { name: 'kb_vector', run: async () => {
+        const kb = await import('./features/kb_vector');
+        kb.closeAllKb();
+      } },
+      { name: 'kb_embed', run: async () => {
+        // Kill the isolated embedder worker so it releases its model promptly.
+        const kbEmbed = await import('./features/kb_embed');
+        kbEmbed.closeEmbedder();
+      } },
+      { name: 'image-runtime', run: async () => {
+        const images = await import('./util/sharp-runtime');
+        images.closeImageRuntime();
+      } },
+      { name: 'office-engine', run: async () => {
+        const extraction = await import('./util/office-extract');
+        await extraction.closeOfficeExtraction();
+        const oe = await import('./features/office/office_engine');
+        oe.closeAllOfficeResidents();
+      } },
+      { name: 'web-assist-session', run: async () => {
+        const webAssistSessions = await import('./features/web_assist_session');
+        await webAssistSessions.flushWebAssistSessions();
+      } },
+      { name: 'web-app-data', run: async () => {
+        // Checkpoint local app databases before closing the application.
+        const apps = await import('./features/web_apps/host');
+        apps.runtime.closeUser(users.getActiveUserId());
+        await apps.runtime.drainData();
+      } },
     ],
     onFailure: name => createLogger(name).warn('shutdown preparation failed'),
+    onIncomplete: async () => {
+      const library = await import('./features/library_corpus');
+      await library.resumeLibraryAdmission();
+      const boot = await import('./util/boot_init');
+      boot.resumeBootAdmission();
+    },
   });
   const flushForShutdown = shutdown.prepare;
 
@@ -1514,7 +1592,7 @@ if (!gotLock) {
       }
       callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write');
     });
-    registerIpc(flushForShutdown);
+    registerIpc(flushForShutdown, () => shutdown.quiescent);
     const stopTaskNotifications = taskNotifications.startTaskNotifications({
       getActiveUserId: () => users.getActiveUserId(),
       isEnabled: () => appConfig.getTaskNotificationsEnabled(),
@@ -1563,16 +1641,6 @@ if (!gotLock) {
       openConversation: openConversationFromTaskNotification,
     });
     app.once('before-quit', stopTaskNotifications);
-    // A CLI agent's process is our child but its own process-group leader, so
-    // quitting without ending it leaves it running with nothing to report to.
-    // Fire-and-forget: Electron does not await this hook, and the deadline
-    // inside only decides whether the CLI gets to write a clean session state
-    // before the app goes.
-    app.once('before-quit', () => {
-      void import('./features/local_agents/runner.js')
-        .then(runner => runner.stopBackgroundRuns('the app is quitting'))
-        .catch(() => { /* nothing was running, or the module never loaded */ });
-    });
     const stopTaskTerminalUi = subscribeTaskTerminals(emitTaskTerminalToRenderer);
     app.once('before-quit', stopTaskTerminalUi);
     // Running Agent work keeps the machine out of idle sleep; an idle app holds nothing.
@@ -1580,6 +1648,11 @@ if (!gotLock) {
     app.once('before-quit', idleSleepGuard.stop);
     clientConfigFeature.clientConfig.subscribeAll((keys) => {
       ipc.broadcastToRenderer('client-config:changed', { keys });
+      if (keys.includes('connectors.catalog') || keys.includes('connectors.dcr_catalog')) {
+        connectorsFeature.refreshStaleToolCaches(users.getActiveUserId(), 'client_config_changed').catch((err) => {
+          log.warn('connector stale tool-cache refresh after client config change failed', { error: logErrorSummary(err) });
+        });
+      }
     });
     const BOOT_BACKGROUND_DEFER_MS = 6_000;
     const bootDevice = getBootDeviceProfile();
@@ -1598,12 +1671,9 @@ if (!gotLock) {
       startupDelayMs: CLIENT_CONFIG_STARTUP_DELAY_MS,
       forceStartupRefresh: false,
     });
-    const connectorsTimer = setTimeout(() => {
-      connectorsFeature.bootstrap(users.getActiveUserId()).catch(() => {
-        /* errors logged inside the feature; never block app startup */
-      });
-    }, CONNECTORS_BOOTSTRAP_DELAY_MS);
-    connectorsTimer.unref?.();
+    scheduleBootBackground('connectors:bootstrap', async () => {
+      await connectorsFeature.bootstrap(users.getActiveUserId());
+    }, CONNECTORS_BOOTSTRAP_DELAY_MS, { resourceClass: 'process', preferIdle: true, maxSliceMs: 30_000 });
     createWindow();
     openLifecycleTracking = startOpenLifecycleTracking({
       app,
@@ -1773,6 +1843,12 @@ if (!gotLock) {
     isQuitting = true;
     if (shutdown.complete) return;
     e.preventDefault();
-    try { await flushForShutdown(); } finally { app.quit(); }
+    try {
+      await flushForShutdown();
+      app.quit();
+    } catch (error) {
+      isQuitting = false;
+      log.error('quit preparation failed', { error: logErrorSummary(error) });
+    }
   });
 }
