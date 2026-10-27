@@ -9,6 +9,73 @@ import { describe, expect, it, vi } from 'vitest';
 const require = createRequire(import.meta.url);
 
 describe('MCP stdio diagnostic boundary', () => {
+  it.each(['spawn-rejection', 'sdk-closed-after-start'])(
+    'retains the real missing-executable failure through %s', mode => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-mcp-missing-'));
+      const probePath = path.join(root, 'probe.cjs');
+      const missing = path.join(root, 'missing-server');
+      // Resolve the same public import export as McpConnection's dynamic
+      // import, rather than the distinct require-condition SDK class.
+      fs.symlinkSync(path.resolve('node_modules'), path.join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+      fs.writeFileSync(probePath, [
+        'const warnings = [];',
+        `require.cache[require.resolve(${JSON.stringify(path.resolve('src/main/logger.ts'))})] = { exports: { createLogger: () => ({ info() {}, warn(message) { warnings.push(message); } }) } };`,
+        `require.cache[require.resolve(${JSON.stringify(path.resolve('src/main/util/proxy-dispatcher.ts'))})] = { exports: { buildChildProxyEnvironment: async () => ({}) } };`,
+        '(async () => {',
+        "  const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');",
+        "  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');",
+        '  const originalStart = StdioClientTransport.prototype.start;',
+        '  const originalConnect = Client.prototype.connect;',
+        '  let spawnCode, sdkRejectedCode, connectCalls = 0, sdkCloseDelivered = false;',
+        '  Client.prototype.connect = async function (...args) {',
+        '    connectCalls++;',
+        '    try { return await Reflect.apply(originalConnect, this, args); }',
+        '    catch (error) { sdkRejectedCode = error.code; throw error; }',
+        '  };',
+        ...(mode === 'sdk-closed-after-start' ? [
+          // Reproduce the Windows ordering while retaining a real failed OS
+          // spawn and the actual SDK Client/transport/close rejection path.
+          // The SDK has accepted start before the later spawn error arrives.
+          '  StdioClientTransport.prototype.start = function () {',
+          '    const onerror = this.onerror;',
+          '    this.onerror = error => { if (error.syscall?.startsWith("spawn")) spawnCode = error.code; onerror?.(error); };',
+          '    void originalStart.call(this).catch(() => { sdkCloseDelivered = true; this.onclose?.(); });',
+          '    return Promise.resolve();',
+          '  };',
+        ] : []),
+        `  const { McpConnection } = require(${JSON.stringify(path.resolve('src/main/features/connectors/mcp-client.ts'))});`,
+        `  const connection = new McpConnection('custom-missing', { kind: 'stdio', command: ${JSON.stringify(missing)}, args: [], env: {} });`,
+        '  try {',
+        '    try { await connection.connect(); throw new Error("missing executable unexpectedly connected"); }',
+        '    catch (error) { process.stdout.write(JSON.stringify({ code: error.code, syscall: error.syscall, connected: connection.isConnected, spawnCode, sdkRejectedCode, connectCalls, sdkCloseDelivered, warnings })); }',
+        '  } finally { await connection.close(); StdioClientTransport.prototype.start = originalStart; Client.prototype.connect = originalConnect; }',
+        '})().catch(error => { process.stderr.write(error.name); process.exitCode = 1; });',
+      ].join('\n'));
+      try {
+        const result = spawnSync(process.execPath, ['-r', require.resolve('tsx/cjs'), probePath], {
+          cwd: root, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ORKAS_WORKSPACE_ROOT: root },
+          encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024,
+        });
+        expect(result.status, result.stderr || result.stdout).toBe(0);
+        expect(result.stderr).toBe('');
+        const outcome = JSON.parse(result.stdout);
+        expect(outcome).toMatchObject({ code: 'ENOENT', connected: false, connectCalls: 1, warnings: ['connect failed'] });
+        expect(outcome.syscall).toBe(`spawn ${missing}`);
+        if (mode === 'sdk-closed-after-start') {
+          expect(outcome.spawnCode).toBe('ENOENT');
+          expect(outcome.sdkCloseDelivered).toBe(true);
+          expect(outcome.sdkRejectedCode).toBe(-32000);
+        }
+        // Retain the captured production warning for the default log review,
+        // without emitting the temporary executable path from syscall.
+        console.warn('MCP missing-executable diagnostic retained', {
+          mode, code: outcome.code, sdkRejectedCode: outcome.sdkRejectedCode,
+          warnings: outcome.warnings,
+        });
+      } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    }, 15_000,
+  );
+
   it.runIf(process.platform === 'darwin' || process.platform === 'win32')
     .each(['graceful', 'ignores-eof', 'failed-initialize', 'reconnect'])(
     'closes native stdio before shutdown or reconnect: %s', async mode => {

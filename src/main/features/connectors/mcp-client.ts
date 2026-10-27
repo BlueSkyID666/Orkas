@@ -196,6 +196,7 @@ export class McpConnection {
     const sdk = await _loadSdk();
     let activeTransportKind: Transport['kind'] | 'sse' = this.transport.kind;
     let transport: import('@modelcontextprotocol/sdk/shared/transport.js').Transport;
+    let spawnFailure: Error | undefined;
     if (this.transport.kind === 'stdio') {
       const proxyEnv = await buildChildProxyEnvironment(this.transport.proxyTargetUrl);
       const envFull: Record<string, string> = { ...this.transport.env, ...proxyEnv };
@@ -215,6 +216,14 @@ export class McpConnection {
         stderr: 'pipe',
         ...(this.transport.cwd ? { cwd: this.transport.cwd } : {}),
       });
+      // On Windows the command shell can start before cross-spawn reports
+      // ENOENT. The SDK then rejects initialization as "Connection closed",
+      // losing the actionable launch error. Its protocol chains this handler.
+      stdioTransport.onerror = error => {
+        const systemError = error as NodeJS.ErrnoException;
+        if (['ENOENT', 'EACCES', 'EPERM'].includes(systemError.code || '')
+          && systemError.syscall?.startsWith('spawn')) spawnFailure = error;
+      };
       if (process.platform === 'win32') {
         const close = stdioTransport.close.bind(stdioTransport);
         let closing: Promise<void> | null = null;
@@ -295,6 +304,7 @@ export class McpConnection {
         timeout_ms: connectTimeoutMs,
       });
     } catch (err) {
+      if (spawnFailure) err = spawnFailure;
       tagTransportFailure(err);
       log.warn('connect failed', {
         id: this.id.startsWith('custom-') ? 'custom' : this.id,
