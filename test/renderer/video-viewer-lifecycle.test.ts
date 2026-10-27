@@ -67,6 +67,7 @@ describe('video media lifecycle', () => {
   it('releases a pending video and ignores its late metadata/errors while the new video loads', async () => {
     const h = viewer();
     await h.open('chat-media://local/first.mp4');
+    expect(h.body.children[0].dataset).toMatchObject({ chatVideoPlaybackSurface: 'floating_player' });
     const old = h.videos[0];
     await h.open('chat-media://local/second.mp4');
     const current = h.videos[1];
@@ -90,6 +91,7 @@ describe('video media lifecycle', () => {
   it('settles a failed video and can open another video without keeping its source alive', async () => {
     const h = viewer();
     await h.openLocal();
+    expect(h.body.children[0].dataset).toMatchObject({ chatVideoPlaybackSurface: 'floating_player' });
     const failed = h.videos[0];
     failed.dispatchEvent(new Event('error'));
     expect(h.body.getAttribute('aria-busy')).toBeNull();
