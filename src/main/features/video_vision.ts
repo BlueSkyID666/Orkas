@@ -29,7 +29,7 @@
 
 import * as fs from 'node:fs/promises';
 
-import { chatWithModel } from '../model/client';
+import type { chatWithModel } from '../model/client';
 import { toCompressedJpeg } from '../util/image-transform';
 import { createLogger } from '../logger';
 import { logErrorSummary, logPathRef } from '../util/log-redact';
@@ -172,7 +172,6 @@ export async function analyzeFrames(params: AnalyzeFramesParams): Promise<Analyz
     return { ok: false, reason: 'no-frames', message: 'all frames failed to load' };
   }
 
-  const chat = params.chat ?? chatWithModel;
   const controller = new AbortController();
   const abortFromCaller = () => controller.abort();
   if (params.signal) {
@@ -188,8 +187,11 @@ export async function analyzeFrames(params: AnalyzeFramesParams): Promise<Analyz
   });
 
   try {
-    const call = Promise.resolve(
-      chat({
+    // Loading the review surface or finding no readable frames must not load
+    // the model runtime. First-use loading shares the call's timeout/error path.
+    const call = Promise.resolve().then(async () => {
+      const chat = params.chat ?? (await import('../model/client')).chatWithModel;
+      return chat({
         userId: params.userId,
         message: buildVisionMessage(params.question, loaded.length),
         images: loaded,
@@ -198,8 +200,8 @@ export async function analyzeFrames(params: AnalyzeFramesParams): Promise<Analyz
         abortSignal: controller.signal,
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
         ...(params.agentId ? { agentId: params.agentId } : {}),
-      }),
-    ).catch((err) => ({ ok: false, text: '', error: (err as Error).message || String(err), aborted: false }));
+      });
+    }).catch((err) => ({ ok: false, text: '', error: (err as Error).message || String(err), aborted: false }));
 
     const res = await Promise.race([call, timeout]);
 

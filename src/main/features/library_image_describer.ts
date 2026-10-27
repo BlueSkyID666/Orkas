@@ -1,7 +1,6 @@
 import * as crypto from 'node:crypto';
 
 import { createLogger } from '../logger';
-import { chatWithModel } from '../model/client';
 import { prompts } from '../prompts/loader';
 import {
   LIBRARY_IMAGE_TRANSFORM_OPTIONS,
@@ -53,7 +52,9 @@ export async function describeLibraryImage(
     source_name_json: JSON.stringify(cleanName),
   });
 
-  const modelCall: Promise<VisionResult> = chatWithModel({
+  // Index/catalog startup must not load the model runtime before an image
+  // actually needs description. Include first-use loading in the deadline.
+  const modelCall: Promise<VisionResult> = import('../model/client').then(({ chatWithModel }) => chatWithModel({
     userId,
     sessionId,
     message,
@@ -64,7 +65,7 @@ export async function describeLibraryImage(
     requireImageInput: true,
     idleTimeout: Math.ceil(timeoutMs / 1000),
     abortSignal: controller.signal,
-  }).catch((err) => ({
+  })).catch((err) => ({
     ok: false,
     text: '',
     error: (err as Error).message || String(err),
