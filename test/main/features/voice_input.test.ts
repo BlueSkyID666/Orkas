@@ -37,7 +37,7 @@ describe('API-key voice session', () => {
     expect(getVoiceStatus()).toEqual({ configured: false });
   });
 
-  it.each([401, 403, 429, 500])('returns a bounded public failure for HTTP %s', async (status) => {
+  it.each([401, 403, 429, 500, 503])('returns a bounded public failure for HTTP %s', async (status) => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('private upstream error', { status })));
     const result = await createVoiceSession();
     expect(result).toEqual({ ok: false, code: status === 401 ? 'invalid_api_key' : status === 403 ? 'insufficient_scope' : status === 429 ? 'rate_limit_exceeded' : 'unavailable' });

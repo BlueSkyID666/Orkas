@@ -139,8 +139,16 @@
       this._emit('onStage', 'microphone_ms');
       let ws;
       try {
+        const url = typeof this._url === 'function' ? await this._url() : this._url;
+        if (epoch !== this._captureEpoch) return;
+        if (this._pendingClose) {
+          this._teardownCapture();
+          return;
+        }
+        this._url = url;
         ws = new WebSocket(this._connectUrl());
       } catch (e) {
+        if (epoch !== this._captureEpoch) return;
         try { if (voiceLog) voiceLog.error('ASR websocket constructor failed', _errorInfo(e)); } catch {}
         this._teardownCapture();
         this._emit('onError', e);
@@ -735,6 +743,8 @@ registerProcessor('orkas-asr-capture', C);`;
     function reset(attempt) {
       reportVoiceTiming(attempt);
       clearLimitTimer(attempt);
+      if (attempt.visibilityTimer !== null) clearInterval(attempt.visibilityTimer);
+      attempt.visibilityTimer = null;
       attempt.insertion?.dispose();
       if (activeAttempt !== attempt) return;
       activeAttempt = null;
@@ -779,6 +789,7 @@ registerProcessor('orkas-asr-capture', C);`;
         before: composerText(textareaEl).slice(0, composerSelection(textareaEl).start),
         insertion: composerInsertion(textareaEl),
         limitTimer: null,
+        visibilityTimer: null,
         client: null,
       };
       activeAttempt = attempt;
@@ -810,30 +821,20 @@ registerProcessor('orkas-asr-capture', C);`;
           return;
         }
       }
-      let url = '';
-      try {
-        const r = await invoke('createSession');
-        if (activeAttempt !== attempt || attempt.cancelled) return;
-        if (r && (r.error === 'E_ORKAS_API_KEY_REQUIRED' || ['api_key_required', 'invalid_api_key', 'insufficient_scope', 'rate_limit_exceeded'].includes(r.code))) {
-          attempt.finished = true;
-          await publicGuidance(r.code || 'api_key_required');
-          reset(attempt);
-          return;
-        }
-        if (!r || r.ok === false || !r.url) throw new Error((r && r.error) || 'no_url');
-        url = r.url;
-        markVoiceTiming(attempt, 'session_ms');
-      } catch (e) {
-        if (activeAttempt !== attempt || attempt.cancelled) return;
-        try { if (voiceLog) voiceLog.error('failed to resolve ASR websocket URL', _errorInfo(e)); } catch {}
-        attempt.finished = true;
-        _alert(_t('chat.mic_error_unavailable', 'Voice input is unavailable right now.'));
-        reset(attempt);
-        return;
-      }
       if (activeAttempt !== attempt || attempt.cancelled) return;
       if (!attempt.insertion?.valid()) { reset(attempt); return; }
-      const attemptClient = new AsrClient(url, {
+      // Resolve the one-use ticket only after getUserMedia admits this device.
+      const attemptClient = new AsrClient(async () => {
+        const result = await invoke('createSession');
+        if (activeAttempt !== attempt || attempt.cancelled) return '';
+        if (!attempt.insertion?.valid()) { cancel(); return ''; }
+        if (!result || result.ok === false || !result.url) {
+          throw Object.assign(new Error(), { code: result?.code
+            || (result?.error === 'E_ORKAS_API_KEY_REQUIRED' ? 'api_key_required' : 'unavailable') });
+        }
+        markVoiceTiming(attempt, 'session_ms');
+        return result.url;
+      }, {
         onStage: (stage) => { if (activeAttempt === attempt) markVoiceTiming(attempt, stage); },
         onOpen: () => {
           if (activeAttempt !== attempt) return;
@@ -841,6 +842,10 @@ registerProcessor('orkas-asr-capture', C);`;
           attempt.recordingStarted = true;
           setAttemptPhase(attempt, 'recording');
           startLimitTimer(attempt);
+          attempt.visibilityTimer = setInterval(() => {
+            if (activeAttempt !== attempt) return;
+            if (textareaEl.getClientRects().length === 0) cancel();
+          }, 1000);
         },
         onResult: ({ text, last }) => {
           if (activeAttempt !== attempt) return;

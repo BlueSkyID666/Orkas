@@ -787,7 +787,10 @@ describe('voice input controller ticket and composer ownership', () => {
     const h = controllerHarness({createSession:vi.fn(async () => { throw new Error('private-ticket-url-and-key'); })});
     await h.start();
     expect(h.alerts).toEqual(['Voice input is unavailable right now.']);
-    expect(h.capture).not.toHaveBeenCalled();
+    expect(h.capture).toHaveBeenCalledTimes(1);
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    expect(h.captureNodes).toHaveLength(0);
+    expect(h.sockets).toEqual([]);
     expect(h.button.dataset.voicePhase).toBe('idle');
     expect(h.textarea.value).toBe('Keep this draft');
   });
@@ -806,10 +809,13 @@ describe('voice input controller ticket and composer ownership', () => {
     await h.settle();
     expect(h.sockets).toHaveLength(1);
     expect(h.sockets[0].url).toContain('ticket=new');
-    expect(h.capture).toHaveBeenCalledTimes(1);
+    expect(h.capture).toHaveBeenCalledTimes(2);
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    expect(h.captureNodes).toHaveLength(0);
     expect(h.button.dataset.voicePhase).toBe('connecting');
     expect(h.alerts).toEqual([]);
     h.ownerChange();
+    expect(h.stopped).toHaveBeenCalledTimes(2);
   });
 
   it('abandons pending microphone preflight when the user stops', async () => {
@@ -833,7 +839,9 @@ describe('voice input controller ticket and composer ownership', () => {
     h.textarea.value = 'Other task draft';
     resolveTicket({ok:true,url:'wss://example.test/asr?ticket=stale'});
     await h.settle();
-    expect(h.capture).not.toHaveBeenCalled();
+    expect(h.capture).toHaveBeenCalledTimes(1);
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    expect(h.captureNodes).toHaveLength(0);
     expect(h.sockets).toEqual([]);
     expect(h.button.dataset.voicePhase).toBe('idle');
     expect(h.textarea.value).toBe('Other task draft');
@@ -1099,4 +1107,91 @@ describe('voice union failure boundaries', () => {
     expect(h.textarea.value).toBe('Keep this draft');
     expect(h.send).not.toHaveBeenCalled();
   });
+});
+
+// Remote microphone admission and hidden-composer cleanup must coexist with
+// local ready/gzip/ordering/epoch ownership, not replace that transport.
+describe('merged remote voice admission and editor lifetime', () => {
+  it.each(['NotFoundError', 'NotReadableError'])('does not request a ticket when microphone acquisition fails with %s', async (name) => {
+    const h = controllerHarness();
+    h.capture.mockRejectedValue(Object.assign(new Error(), { name }));
+    await h.start();
+    expect(h.voice.createSession).not.toHaveBeenCalled();
+    expect(h.sockets).toEqual([]);
+    expect(h.captureNodes).toHaveLength(0);
+    expect(h.textarea.value).toBe('Keep this draft');
+    expect(h.alerts).toEqual([h.context.t(name === 'NotFoundError' ? 'chat.mic_error_no_device' : 'chat.mic_error_busy')]);
+    expect(h.button.dataset.voicePhase).toBe('idle');
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it('releases a late microphone grant after cancellation without requesting a ticket', async () => {
+    const h = controllerHarness();
+    let grant!: (stream: unknown) => void;
+    h.capture.mockImplementation(() => new Promise(resolve => { grant = resolve; }));
+    await h.start();
+    h.button.click();
+    grant({ getTracks: () => [{ stop: h.stopped }] });
+    await h.settle();
+    expect(h.voice.createSession).not.toHaveBeenCalled();
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    expect(h.sockets).toEqual([]);
+    expect(h.button.dataset.voicePhase).toBe('idle');
+    expect(h.textarea.value).toBe('Keep this draft');
+    expect(h.alerts).toEqual([]);
+  });
+
+  it('preserves a selected draft range when a terminal response contains no speech', async () => {
+    const h = controllerHarness(); h.textarea.selectionStart = 0;
+    await h.start(); h.sockets[0].open(); h.sockets[0].result('', true); await h.settle();
+    expect(h.replacements).toEqual([]);
+    expect(h.textarea.value).toBe('Keep this draft');
+    expect(h.alerts).toEqual([h.context.t('chat.mic_empty')]);
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    expect(h.button.dataset.voicePhase).toBe('idle');
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it('cancels recording when its editor becomes hidden and clears its visibility watcher', async () => {
+    const h = controllerHarness();
+    const watchers = new Map<number, Function>(); let next = 0;
+    h.context.setInterval = (fn: Function) => { watchers.set(++next, fn); return next; };
+    h.context.clearInterval = (id: number) => watchers.delete(id);
+    await h.start(); const socket = h.sockets[0]; socket.open(); await h.settle();
+    expect(watchers.size).toBe(1);
+    h.textarea.getClientRects = () => [];
+    for (const callback of [...watchers.values()]) callback();
+    socket.result('belongs to the hidden composer', true); await h.settle();
+    expect(watchers.size).toBe(0);
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    expect(socket.close).toHaveBeenCalledTimes(1);
+    expect(h.button.dataset.voicePhase).toBe('idle');
+    expect(h.textarea.value).toBe('Keep this draft');
+    expect(h.alerts).toEqual([]);
+    expect(h.send).not.toHaveBeenCalled();
+  });
+  it('ignores an old ticket result after the same client starts a replacement capture', async () => {
+    const h = controllerHarness();
+    let resolveOld!: (url: string) => void;
+    const resolveUrl = vi.fn().mockImplementationOnce(() => new Promise<string>(resolve => { resolveOld = resolve; }))
+      .mockResolvedValue('wss://example.test/asr?ticket=replacement');
+    const result = vi.fn();
+    const client = h.context.window.VoiceInput.createClient(resolveUrl, { onResult: result });
+    const first = client.start(); await h.settle();
+    client.close();
+    await client.start(); const socket = h.sockets[0]; socket.open(); await h.settle();
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    resolveOld('wss://example.test/asr?ticket=obsolete'); await first; await h.settle();
+    expect(h.sockets).toHaveLength(1);
+    expect(socket.url).toContain('ticket=replacement');
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    h.captureNodes[0].onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array([.25, .25, .25]) } });
+    await h.settle();
+    expect(Array.from(socket.send.mock.calls[0][0] as Uint8Array)).toEqual([255, 31]);
+    socket.result('current speech', true);
+    expect(result).toHaveBeenCalledExactlyOnceWith({ text: 'current speech', last: true });
+    client.close();
+    expect(h.stopped).toHaveBeenCalledTimes(2);
+  });
+
 });
