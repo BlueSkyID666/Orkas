@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { previewBundle } from '../../../src/main/features/web_apps/preview';
+import { freezeFileMetadata } from '../../helpers/frozen-file-metadata';
 
 let root: string, entry: string;
 beforeEach(() => {
@@ -30,9 +31,9 @@ describe('preview source opt-in and revision isolation', () => {
     manifest(); const bundle = (await previewBundle(entry))!;
     expect(bundle.resolve('index.html')).toEqual({ absPath: entry, mime: 'text/html; charset=utf-8' });
     for (const rel of ['../private.txt', '/private.txt', 'dir/../../private.txt', '.env', 'dir\\file']) expect(bundle.resolve(rel)).toBeNull();
-    expect(bundle.valid!()).toBe(true);
+    expect(await bundle.valid!()).toBe(true);
     fs.writeFileSync(entry, '<h1>Changed</h1>');
-    expect(bundle.valid!()).toBe(false); expect(bundle.resolve('index.html')).toBeNull();
+    expect(await bundle.valid!()).toBe(false); expect(bundle.resolve('index.html')).toBeNull();
   });
   it('rejects linked manifests, sibling files and linked assets before launching', async () => {
     const outside = path.join(root, 'outside.json'); fs.writeFileSync(outside, '{"sdkVersion":1,"capabilities":[]}');
@@ -42,6 +43,23 @@ describe('preview source opt-in and revision isolation', () => {
     fs.symlinkSync(outside, path.join(path.dirname(entry), 'asset.json'));
     await expect(previewBundle(entry)).rejects.toThrow('E_BUNDLE');
   });
+});
+
+it('rejects changed preview content at the actual protocol boundary despite identical metadata', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { createPreviewSdk } = await import('../../../src/main/features/web_apps/preview');
+  manifest();
+  const restore = freezeFileMetadata([entry]);
+  const contents: any = Object.assign(new EventEmitter(), { id: 20, mainFrame: {}, isDestroyed: () => false });
+  let resource!: (request: Request) => Promise<Response>;
+  const session: any = { protocol: { handle: (_scheme: string, handler: typeof resource) => { resource = handler; }, unhandle() {} } };
+  let preview: Awaited<ReturnType<typeof createPreviewSdk>> | undefined;
+  try {
+    preview = await createPreviewSdk(session, contents, (await previewBundle(entry))!);
+    expect((await resource(new Request(preview.origin + '/index.html'))).status).toBe(200);
+    fs.writeFileSync(entry, '<h1>Changed</h1>');
+    expect((await resource(new Request(preview.origin + '/index.html'))).status).toBe(403);
+  } finally { try { await preview?.dispose(); } finally { restore(); } }
 });
 
 it('accepts only its own trusted frame, token and narrow operations, then revokes resources and deletes storage', async () => {
