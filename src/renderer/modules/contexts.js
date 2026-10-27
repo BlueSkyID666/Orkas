@@ -1273,7 +1273,7 @@ async function _handleCtxMove(srcRel, targetDir) {
     }
     if (!data?.ok) {
       const errorCode = data.error === 'destination already exists' ? 'target_exists' : 'move_failed';
-      logResult('failure', errorCode);
+      logFailure(errorCode);
       const message = errorCode === 'target_exists'
         ? t('contexts.dnd.target_exists', { name: base })
         : t('contexts.dnd.move_failed');

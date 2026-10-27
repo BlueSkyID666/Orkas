@@ -1064,3 +1064,36 @@ describe('Library drafts before moving or copying', () => {
     expect(context.window.LibraryTransfer.open).not.toHaveBeenCalled();
   });
 });
+
+describe('Library rejected move recovery', () => {
+  it.each([
+    ['destination already exists', 'contexts.dnd.target_exists:{"name":"draft.md"}', 'target_exists'],
+    ['move unavailable', 'contexts.dnd.move_failed:{}', 'move_failed'],
+  ])('shows the real failure and keeps paths/drafts intact when rename returns %s', async (error, message, code) => {
+    const context = loadContextsScript();
+    const trigger = { disabled: false };
+    context.document.getElementById = (id: string) => id === 'contexts-project-select-trigger' ? trigger : null;
+    context.uiAlert = vi.fn(async () => {});
+    context.uiToast = vi.fn();
+    context.loadContexts = vi.fn();
+    context._applyCtxPathChange = vi.fn();
+    context._ctxFetch = vi.fn(async () => ({ json: async () => ({ ok: false, error }) }));
+    vm.runInContext('_ctxActive = { id: "draft.md" }; _ctxDrafts.set("draft.md", "Unsaved content");', context);
+
+    await expect(context._handleCtxMove('draft.md', 'Archive')).resolves.toBeUndefined();
+
+    expect(context._ctxFetch).toHaveBeenCalledExactlyOnceWith('/api/contexts/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ src: 'draft.md', dst: 'Archive/draft.md' }),
+    });
+    expect(context.uiAlert).toHaveBeenCalledExactlyOnceWith(message);
+    expect(context.__log.warn).toHaveBeenCalledWith('library file move failed', expect.objectContaining({ error_code: code }));
+    expect(context._applyCtxPathChange).not.toHaveBeenCalled();
+    expect(context.loadContexts).not.toHaveBeenCalled();
+    expect(context.uiToast).not.toHaveBeenCalled();
+    expect(vm.runInContext('_ctxActive.id', context)).toBe('draft.md');
+    expect(vm.runInContext('_ctxDrafts.get("draft.md")', context)).toBe('Unsaved content');
+    expect(vm.runInContext('_ctxOperations', context)).toBe(0);
+    expect(trigger.disabled).toBe(false);
+  });
+});
