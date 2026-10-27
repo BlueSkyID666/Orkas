@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { ownFixtureServer } from './fixtures/server-cleanup';
 
 import { expectComposerText } from './fixtures/composer';
-import { expect, test as base, OrkasTestApp } from './fixtures/orkas';
+import { expect, openSidebarEntry, test as base, OrkasTestApp } from './fixtures/orkas';
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { analyzeWebAppLogs } from './fixtures/web-app-log-analysis';
@@ -48,6 +48,27 @@ async function expectPublicTicketTransport(app: OrkasTestApp): Promise<void> {
 }
 
 test.describe('voice input', () => {
+  test('releases the microphone when leaving its composer and preserves the unsent draft', async ({ voiceOrkas }, info) => {
+    const page = voiceOrkas.page!;
+    await voiceOrkas.installVoiceCaptureStub();
+    const input = page.locator('#new-chat-input');
+    const mic = page.locator('#new-chat-mic-btn');
+    await input.fill('Keep this draft after navigation');
+    await mic.click();
+    await expect(mic).toHaveAttribute('data-voice-phase', 'recording', { timeout: 20_000 });
+    await openSidebarEntry(page, '#agents-btn');
+    await expect(input).not.toBeVisible();
+    await expect.poll(() => page.evaluate(() => (window as any).__e2eVoiceTrackStops)).toBe(1);
+    await expect(mic).toHaveAttribute('data-voice-phase', 'idle');
+    await page.screenshot({ path: info.outputPath('voice-left-composer.png') });
+    await openSidebarEntry(page, '#new-chat-btn');
+    await expectComposerText(input, 'Keep this draft after navigation');
+    await expect(page.locator('.ui-dialog-overlay:visible')).toHaveCount(0);
+    await expect(page.locator('#chat-history .chat-message.user')).toHaveCount(0);
+    await expectPublicTicketTransport(voiceOrkas);
+    await page.screenshot({ path: info.outputPath('voice-returned-draft.png') });
+  });
+
   test('inserts the terminal transcript for review without auto-sending', async ({ voiceOrkas }, info) => {
     if (!voiceOrkas.page) throw new Error('Orkas renderer is unavailable');
     const page = voiceOrkas.page;
