@@ -585,6 +585,7 @@
   "apps.open_hint": "Orkas で開く",
   "apps.open_failed": "アプリを開けませんでした",
   "apps.publish_action": "公開",
+  "apps.publish_visit": "開く",
   "apps.edit": "編集",
   "apps.edit_conv_title": "「{name}」を編集",
   "apps.edit_seed": "インタラクティブアプリ「{name}」を変更してください。ソースは添付「{file}」です:",

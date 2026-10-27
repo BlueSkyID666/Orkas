@@ -179,7 +179,10 @@ describe('Orkas public API quick setup', () => {
     vm.runInContext(`
       _settingsAttachReorderDnd = () => {};
       _settingsState.searchProfiles = [{ id: 's1', provider: 'orkas-api', label: 'Orkas', apiKeyMasked: 'sk-…1' }];
-      _settingsState.imageProfiles = [{ id: 'i1', provider: 'orkas-api', model: 'orkas-image', label: 'Orkas', apiKeyMasked: 'sk-…1' }];
+      _settingsState.imageProfiles = [
+        { id: 'i1', provider: 'orkas-api', model: 'orkas-image', label: 'Orkas', apiKeyMasked: 'sk-…1' },
+        { id: 'i2', provider: 'openai', model: 'gpt-image-2', label: 'Personal', apiKeyMasked: 'sk-…2' }
+      ];
       _settingsState.videoProfiles = [{ id: 'v1', provider: 'orkas-api', model: 'orkas-video', label: 'Orkas', apiKeyMasked: 'sk-…1' }];
       _settingsState.ttsProfiles = [{ id: 't1', provider: 'orkas-api', model: 'orkas-tts-1', label: 'Orkas', apiKeyMasked: 'sk-…1' }];
       _settingsRenderSearchEntries();
@@ -194,6 +197,13 @@ describe('Orkas public API quick setup', () => {
     expect(configuredLabel('settings-image-entries')).toContain('>Orkas · Image</span>');
     expect(configuredLabel('settings-video-entries')).toContain('>Orkas · Video</span>');
     expect(configuredLabel('settings-tts-entries')).toContain('>Orkas · Voice</span>');
+    const mediaDetails = (id: string, index = 0) => elements.get(id)!.children[index]!.children[1]!.children
+      .filter(child => child.className.includes('entry-media-model')).map(child => child.textContent);
+    expect(mediaDetails('settings-image-entries')).toEqual(['Seedream 5.0 Flash']);
+    expect(mediaDetails('settings-video-entries')).toEqual(['Seedance 2.0/2.5']);
+    expect(mediaDetails('settings-image-entries', 1)).toEqual([]);
+    expect(mediaDetails('settings-search-entries')).toEqual([]);
+    expect(mediaDetails('settings-tts-entries')).toEqual([]);
     expect(source).toContain('settings.orkas_api.recommended');
     expect(source).toContain('settings.orkas_api.includes');
   });

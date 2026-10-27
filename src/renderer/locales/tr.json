@@ -585,6 +585,7 @@
   "apps.open_hint": "Orkas'ta aç",
   "apps.open_failed": "Uygulama açılamadı",
   "apps.publish_action": "Yayımla",
+  "apps.publish_visit": "Aç",
   "apps.edit": "Düzenle",
   "apps.edit_conv_title": "\"{name}\" düzenle",
   "apps.edit_seed": "\"{name}\" etkileşimli uygulamasını değiştir. Kaynak: ekli \"{file}\":",

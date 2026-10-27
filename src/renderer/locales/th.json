@@ -585,6 +585,7 @@
   "apps.open_hint": "เปิดใน Orkas",
   "apps.open_failed": "เปิดแอปไม่ได้",
   "apps.publish_action": "เผยแพร่",
+  "apps.publish_visit": "เปิด",
   "apps.edit": "แก้ไข",
   "apps.edit_conv_title": "แก้ไข \"{name}\"",
   "apps.edit_seed": "แก้ไขแอปแบบโต้ตอบ \"{name}\" ต้นฉบับ: ไฟล์แนบ \"{file}\":",

@@ -2783,6 +2783,12 @@ function _settingsRenderImageEntries() {
       ${p.apiKeyMasked ? `<span class="account-mask">${escapeHtml(p.apiKeyMasked)}</span>` : ''}
     `;
     main.appendChild(primary);
+    if (isOrkasApi) {
+      const model = document.createElement('div');
+      model.className = 'entry-included-models entry-media-model';
+      model.textContent = 'Seedream 5.0 Flash';
+      main.appendChild(model);
+    }
     row.appendChild(main);
 
     const actions = document.createElement('div');
@@ -2944,6 +2950,12 @@ function _settingsRenderVideoEntries() {
       ${p.apiKeyMasked ? `<span class="account-mask">${escapeHtml(p.apiKeyMasked)}</span>` : ''}
     `;
     main.appendChild(primary);
+    if (isOrkasApi) {
+      const model = document.createElement('div');
+      model.className = 'entry-included-models entry-media-model';
+      model.textContent = 'Seedance 2.0/2.5';
+      main.appendChild(model);
+    }
     if (!available) {
       const reason = document.createElement('div');
       reason.className = 'form-hint';

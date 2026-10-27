@@ -15252,6 +15252,10 @@ body.is-task-side-panel-resizing * { cursor: col-resize !important; }
   overflow-wrap: anywhere;
   white-space: normal;
 }
+.entry-included-models.entry-media-model {
+  font-size: 12px;
+  line-height: 1.5;
+}
 .entry-row {
   display: flex;
   align-items: center;

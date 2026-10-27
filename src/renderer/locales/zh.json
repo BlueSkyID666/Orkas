@@ -585,6 +585,7 @@
   "apps.open_hint": "在 Orkas 中打开",
   "apps.open_failed": "无法打开应用",
   "apps.publish_action": "发布",
+  "apps.publish_visit": "打开",
   "apps.edit": "编辑",
   "apps.edit_conv_title": "编辑「{name}」",
   "apps.edit_seed": "请修改交互应用「{name}」，源码见附件「{file}」：",

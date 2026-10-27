@@ -585,6 +585,7 @@
   "apps.open_hint": "Открыть в Orkas",
   "apps.open_failed": "Не удалось открыть приложение",
   "apps.publish_action": "Опубликовать",
+  "apps.publish_visit": "Открыть",
   "apps.edit": "Редактировать",
   "apps.edit_conv_title": "Редактировать «{name}»",
   "apps.edit_seed": "Измени интерактивное приложение «{name}». Исходник: вложенный файл «{file}»:",

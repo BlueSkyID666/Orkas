@@ -585,6 +585,7 @@
   "apps.open_hint": "Orkas에서 열기",
   "apps.open_failed": "앱을 열 수 없습니다",
   "apps.publish_action": "게시",
+  "apps.publish_visit": "열기",
   "apps.edit": "편집",
   "apps.edit_conv_title": "\"{name}\" 편집",
   "apps.edit_seed": "대화형 앱 \"{name}\"을(를) 수정해 주세요. 소스: 첨부된 \"{file}\":",

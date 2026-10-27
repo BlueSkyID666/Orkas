@@ -585,6 +585,7 @@
   "apps.open_hint": "Ouvrir dans Orkas",
   "apps.open_failed": "Impossible d’ouvrir l’application",
   "apps.publish_action": "Publier",
+  "apps.publish_visit": "Ouvrir",
   "apps.edit": "Modifier",
   "apps.edit_conv_title": "Modifier « {name} »",
   "apps.edit_seed": "Modifiez l’application interactive « {name} ». Source : pièce jointe « {file} » :",

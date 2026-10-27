@@ -585,6 +585,7 @@
   "apps.open_hint": "فتح في Orkas",
   "apps.open_failed": "تعذّر فتح التطبيق",
   "apps.publish_action": "نشر",
+  "apps.publish_visit": "فتح",
   "apps.edit": "تعديل",
   "apps.edit_conv_title": "تعديل \"{name}\"",
   "apps.edit_seed": "عدّل التطبيق التفاعلي \"{name}\". المصدر: المرفق \"{file}\":",

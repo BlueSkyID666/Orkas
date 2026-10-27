@@ -22,6 +22,43 @@ async function openAddModelDialog(page: import('@playwright/test').Page): Promis
 }
 
 test.describe('settings modules and model guard', () => {
+  test('shows public image and video model details across languages and widths', async ({ orkas }, testInfo) => {
+    const page = orkas.page!;
+    expect(await orkas.invoke('orkasApi.configureAll', { apiKey: 'orkas-e2e-service-details-xxxxxxxx' }))
+      .toMatchObject({ ok: true, configured: true });
+    await openSettingsTab(page, 'credentials');
+    for (const [language, width] of [['en', 1280], ['zh', 620]] as const) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(async language => { await (window as any).setLang(language); }, language);
+      for (const [kind, label, model] of [
+        ['image', 'Orkas · Image', 'Seedream 5.0 Flash'],
+        ['video', 'Orkas · Video', 'Seedance 2.0/2.5'],
+      ] as const) {
+        await page.locator(`[data-settings-model-tab="${kind}"]`).click();
+        const row = page.locator(`#settings-${kind}-entries .entry-row`).filter({
+          has: page.locator('.entry-provider', { hasText: label }),
+        });
+        await expect(row).toHaveCount(1);
+        const detail = row.locator('.entry-media-model');
+        await expect(detail).toHaveText(model);
+        expect(await detail.evaluate(element => {
+          const box = element.getBoundingClientRect();
+          const row = element.closest('.entry-row')!;
+          const bounds = row.getBoundingClientRect();
+          const title = row.querySelector('.entry-primary')!.getBoundingClientRect();
+          return box.top >= title.bottom && box.left >= bounds.left && box.right <= bounds.right
+            && element.scrollWidth <= element.clientWidth + 1;
+        })).toBe(true);
+        await row.screenshot({ path: testInfo.outputPath(`${kind}-${language}-${width}.png`) });
+      }
+      for (const kind of ['search', 'tts']) {
+        await page.locator(`[data-settings-model-tab="${kind}"]`).click();
+        await expect(page.locator(`#settings-${kind}-entries .entry-media-model`)).toHaveCount(0);
+      }
+    }
+    expect(orkas.modelRequests).toHaveLength(0);
+  });
+
   test('keeps model savings readable beside the API-key title across languages and widths', async ({ appPage }, testInfo) => {
     await openSettingsTab(appPage, 'credentials');
     const card = appPage.locator('#settings-orkas-api-group');
