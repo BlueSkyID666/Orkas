@@ -3,12 +3,14 @@
 // index.ts rule + tsx/cjs transpilation). Keeps __dirname semantics identical
 // to running plain JS — no compile step in dev.
 //
-// Two hooks:
+// TypeScript hooks:
 //  - `tsx/cjs` (sync require hook) handles src/main/**/*.ts on the require()
 //    code path.
 //  - `tsx/esm` (ESM loader, registered via node:module) handles dynamic
 //    `import()` specifiers that resolve to .ts files — notably the
 //    `import('#core-agent')` subpath import that targets core-agent source.
+// Native .mjs dependencies stay on Main's native loader path so synchronous
+// ESM linking does not wait on a transpilation worker for each JavaScript edge.
 'use strict';
 
 const fs = require('node:fs');
@@ -78,6 +80,7 @@ configureWindowsVcRuntimePath();
 configurePackagedEsbuildBinary();
 
 require('tsx/cjs');
+require('./src/main/util/native-esm-loader.js').registerNativeEsmLoader();
 require('tsx/esm/api').register();
 
 require('./src/main');

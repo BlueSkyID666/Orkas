@@ -120,11 +120,11 @@ describe('packaged-entrypoint-gate', () => {
     expect(gate.PACKAGED_BIN_ENTRYPOINTS).not.toContain('shopify-setup-requirements.cjs');
   });
 
-  it('loads the bridge SDK closure outside the source tree and rejects a missing nested validator', () => {
+  it('loads the bridge SDK closure outside the source tree and rejects a missing shared validator', () => {
     const root = packagedRuntimeFixture();
     fs.copyFileSync(path.join(process.cwd(), 'package-lock.json'), path.join(root, 'package-lock.json'));
     expect(() => gate.verifyBridgeSdkRuntime(root)).not.toThrow();
-    fs.rmSync(path.join(root, 'node_modules', '@modelcontextprotocol', 'server', 'node_modules', 'zod'), { recursive: true });
+    fs.rmSync(path.join(root, 'node_modules', 'zod'), { recursive: true });
     const child = spawnSync(process.env.ORKAS_TEST_NODE || process.execPath, ['-e',
       `require(${JSON.stringify(path.join(process.cwd(), 'bin', 'packaged-entrypoint-gate.cjs'))}).verifyBridgeSdkRuntime(${JSON.stringify(root)})`,
     ], { encoding: 'utf8', timeout: 10000 });
