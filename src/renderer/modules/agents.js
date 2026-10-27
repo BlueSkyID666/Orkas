@@ -1972,6 +1972,11 @@ async function _renderAgentDetailRuntime(agent) {
     pendingTrigger.setAttribute('aria-disabled', 'true');
     pendingTrigger.setAttribute('aria-busy', 'true');
   }
+  // Keep feedback mounted while discovery is pending so overlapping refreshes
+  // and locale updates retain the same control and its current upgrade state.
+  if (previousRuntimeKey === runtimeKey && previousUpgradeControl) {
+    slot.appendChild(previousUpgradeControl);
+  }
 
   // Share the process-lifetime discovery cache with the create panel.
   // Opening a detail must not synchronously force the same version processes
@@ -1986,7 +1991,8 @@ async function _renderAgentDetailRuntime(agent) {
       error_type: err && err.name ? String(err.name) : typeof err,
     });
   }
-  if (_selectedAgent?.id !== agent.agent_id || slot.dataset.runtimeKey !== runtimeKey) return;
+  if (_selectedAgent?.id !== agent.agent_id || slot.dataset.runtimeKey !== runtimeKey
+      || pendingMount.parentElement !== slot) return;
   slot.innerHTML = '';
 
   const available = entries.filter(e => e.available);
