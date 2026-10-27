@@ -14504,7 +14504,7 @@ body.is-task-side-panel-resizing * { cursor: col-resize !important; }
 .settings-recycle-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px 18px;
   border-bottom: 1px solid var(--border);

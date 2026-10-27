@@ -100,6 +100,21 @@ test.describe('settings modules and model guard', () => {
     expect(recycleLayout.overflowY).toBe('auto');
     expect(recycleLayout.maxHeight).toBeGreaterThan(0);
     expect(recycleLayout.maxHeight).toBeLessThanOrEqual(320);
+    const clear = appPage.locator('#settings-recycle-body [data-recycle-clear]');
+    for (const [language, width] of [['en', 1280], ['zh', 620]] as const) {
+      await appPage.setViewportSize({ width, height: 900 });
+      await appPage.evaluate(async language => { await (window as any).setLang(language); }, language);
+      await expect(clear).toBeVisible();
+      await expect(clear).toBeDisabled();
+      expect(await clear.evaluate(element => {
+        const button = element.getBoundingClientRect();
+        const toolbar = element.closest('.settings-recycle-toolbar')!.getBoundingClientRect();
+        return Math.abs(toolbar.right - button.right) <= 1 && button.left >= toolbar.left;
+      })).toBe(true);
+      await appPage.locator('#settings-recycle-group').screenshot({ path: testInfo.outputPath(`recycle-clear-${language}-${width}.png`) });
+    }
+    await appPage.setViewportSize({ width: 1280, height: 900 });
+    await appPage.evaluate(async () => { await (window as any).setLang('en'); });
 
     await openSettingsTab(appPage, 'credentials');
     await expect(appPage.locator('[data-settings-add="chat"]')).toBeVisible();
