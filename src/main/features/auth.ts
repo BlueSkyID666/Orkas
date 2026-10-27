@@ -1670,6 +1670,36 @@ async function buildModelNameLookup(): Promise<(p: string, m: string) => string>
   };
 }
 
+/** Read only the first eligible transport's metadata for idle code preparation.
+ * Never refresh OAuth, resolve credentials, construct a client, or send a request. */
+export async function getChatPreloadApi(): Promise<string | null> {
+  if (!hasActiveUser()) return null;
+  const uid = getActiveUserId();
+  const store = loadProfiles();
+  const allowed = store.entries.filter(entry => isEntryAllowed(store, entry) && !isCooledDown(entry.profileId));
+  if (!allowed.length) return null;
+  const resolvable = await buildRuntimeModelResolver(allowed);
+  if (!isActiveAuthOwner(uid)) return null;
+  const entry = allowed.find(entry => resolvable(entry.provider, entry.model));
+  if (!entry) return null;
+  if (EXTERNAL_API_PROVIDERS.includes(entry.provider)) {
+    const models = await import('../model/core-agent/external-providers');
+    if (!isActiveAuthOwner(uid)) return null;
+    if (entry.provider === ORKAS_API_PROVIDER) return models.buildOrkasApiModel(entry.model).api;
+    if (entry.provider === 'moonshot') return models.buildMoonshotModel(entry.model).api;
+    if (entry.provider === 'deepseek') return models.buildDeepSeekModel(entry.model).api;
+    if (entry.provider === 'doubao') return models.buildDoubaoModel(entry.model).api;
+    const config = customRuntimeConfigFromProfile(store.profiles[entry.profileId]);
+    if (!config) return null;
+    return (config.protocol === 'anthropic'
+      ? models.buildCustomAnthropicModel(entry.model, config)
+      : models.buildCustomOpenAICompatibleModel(entry.model, config)).api;
+  }
+  const catalog = await ca();
+  if (!isActiveAuthOwner(uid)) return null;
+  return resolveConfiguredPiModel(catalog, entry.provider, entry.model)?.model.api ?? null;
+}
+
 export async function listEntries(
   opts: { includeUnavailable?: boolean } = {},
 ): Promise<{ entries: EntryView[] }> {

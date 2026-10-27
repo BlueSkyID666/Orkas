@@ -1,4 +1,5 @@
 import { createShutdownCoordinator } from './util/shutdown';
+import { scheduleChatApiPreload } from './features/model-api-preload';
 /**
  * Orkas — Electron main entry.
  *
@@ -283,6 +284,8 @@ function emitTaskTerminalToRenderer(event: TaskTerminalEvent): void {
   taskTerminalUi.emit({ type: 'terminal', ...terminal }, ownerUserId);
 }
 
+let modelApiPreloadScheduled = false;
+
 function createWindow(): BrowserWindow {
   const dev = !app.isPackaged;
   const restored = windowState.restoreWindowState();
@@ -325,6 +328,15 @@ function createWindow(): BrowserWindow {
   win.webContents.on('did-finish-load', () => {
     mainRendererReady = true;
     for (const channel of rendererChannels) channel.flush();
+    if (!modelApiPreloadScheduled) {
+      modelApiPreloadScheduled = true;
+      scheduleChatApiPreload(async () => {
+        if (win.isDestroyed() || win.webContents.isDestroyed() || win.webContents.isLoadingMainFrame()) return false;
+        return await win.webContents.executeJavaScript(
+          'document.documentElement.dataset.orkasBootReady === "true"',
+        ) === true;
+      });
+    }
   });
   win.webContents.on('render-process-gone', () => {
     mainRendererReady = false;

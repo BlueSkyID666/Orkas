@@ -2024,3 +2024,39 @@ describe('auth › chat picker operation ownership', () => {
     } finally { release(); await pending; }
   });
 });
+
+describe('auth › idle API preload metadata', () => {
+  it('returns no target without configured credentials and makes no request', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('No preload network allowed'));
+    try {
+      const a = await import('../../../src/main/features/auth');
+      expect(await a.getChatPreloadApi()).toBeNull();
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { fetch.mockRestore(); }
+  });
+  it.each([
+    ['openai', 'openai-completions'], ['anthropic', 'anthropic-messages'],
+  ])('uses the saved custom %s protocol without changing the selection', async (protocol, api) => {
+    const a = await import('../../../src/main/features/auth');
+    await a.addCustomModelEntry({ protocol, baseUrl: 'https://example.invalid/v1', model: 'fixture-model', apiKey: 'fixture-key' });
+    const before = await a.getConfig();
+    expect(await a.getChatPreloadApi()).toBe(api);
+    expect(await a.getConfig()).toEqual(before);
+  });
+  it('loads the current API metadata without refreshing an expired OAuth credential', async () => {
+    const refresh = vi.fn().mockRejectedValue(new Error('Preload must not refresh credentials'));
+    const provider = { id: 'anthropic', name: 'Controlled OAuth fixture', refreshToken: refresh, getApiKey: (c: any) => c.access };
+    vi.doMock('@earendil-works/pi-ai/oauth', () => ({ getOAuthProvider: () => provider, getOAuthProviders: () => [provider], registerOAuthProvider: vi.fn() }));
+    await writeExpiredOAuthEntry({ providerId: 'anthropic', model: 'claude-sonnet-5' });
+    const a = await import('../../../src/main/features/auth');
+    expect(await a.getChatPreloadApi()).toBe('anthropic-messages');
+    expect(refresh).not.toHaveBeenCalled();
+  });
+  it('reads the changed account instead of reusing a previous preload target', async () => {
+    const a = await import('../../../src/main/features/auth');
+    await a.addApiKeyEntry('anthropic', 'claude-sonnet-5', 'fixture-key');
+    expect(await a.getChatPreloadApi()).toBe('anthropic-messages');
+    (await import('../../../src/main/features/users')).activateUser('preload-other');
+    expect(await a.getChatPreloadApi()).toBeNull();
+  });
+});
