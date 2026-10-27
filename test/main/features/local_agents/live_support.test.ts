@@ -277,3 +277,17 @@ describe('local-agent process log evidence', () => {
       expect(collector.finish()).toMatchObject({ passed: false, capturedLineCount: 1, analyzedLineCount: 1 });
     });
 });
+
+
+describe('local-agent shared log capture boundary', () => {
+  it.each([-1, 0, 1])('bounds a split native log line at 8 MiB (%s)', delta => {
+    const logs = createLocalAgentLogCollector('native-cap');
+    logs.ingest('stdout', 'x'.repeat(8 * 1024 * 1024 + delta));
+    logs.ingest('stdout', '\n');
+    const report = logs.finish();
+    expect(report).toMatchObject({ passed: delta <= 0, coveragePassed: delta <= 0,
+      requiresReview: delta > 0, capturedLineCount: 1, analyzedLineCount: delta <= 0 ? 1 : 0,
+      droppedLineCount: delta <= 0 ? 0 : 1 });
+    expect(report.findings.some(finding => finding.code === 'log-coverage-gap')).toBe(delta > 0);
+  });
+});

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { attachLocalAgentReports, runLocalAgentLauncher } from '../../scripts/local-agent-live-launcher.mjs';
 import { localAgentChildEnv, parseMacOSSystemProxy } from '../../scripts/local-agent-live-proxy-env.mjs';
 import { createModelEvalLogCollector } from '../../scripts/model-eval-log-policy.mjs';
+import { createLocalAgentLogCollector, ingestLocalAgentLogEvent } from '../../scripts/local-agent-live-support.mjs';
 
 const options = () => ({ argv: ['--no-install', '--agents', 'codex'], childEnv: { ELECTRON_RUN_AS_NODE: '', SENTINEL: 'kept' },
   electronBin: '/fixture/electron', electronEntry: '/fixture/entry.mjs', runner: '/fixture/runner.mts',
@@ -69,6 +70,92 @@ describe('public local CLI launcher isolation', () => {
       expect(JSON.parse(fs.readFileSync(outside, 'utf8'))).toEqual(report);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
+
+  it.each(['clean', 'warning', 'error', 'unknown', 'report-control', 'case-control', 'unknown-level', 'overflow', 'native-json-source', 'openclaw-source', 'python-source', 'native-log-source'] as const)
+    ('carries real native log evidence through the saved row and launcher (%s)', async scenario => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'local-cli-log-handoff-'));
+      const reportsDir = path.join(root, 'reports'); fs.mkdirSync(reportsDir);
+      const file = path.join(reportsDir, 'report.json');
+      const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      try {
+        const logs = createLocalAgentLogCollector('native-fixture');
+        const privateMarker = 'private-native-output-marker';
+        const privateSourceMarker = 'private_native_source_marker';
+        if (scenario === 'native-json-source') {
+          ingestLocalAgentLogEvent(logs, { type: 'stderr-line', line: JSON.stringify({
+            level: 'warn', timestamp: '2030-01-01T00:00:00Z', target: '/private/' + privateSourceMarker,
+            fields: { message: privateMarker },
+          }) });
+        } else if (scenario === 'openclaw-source') {
+          ingestLocalAgentLogEvent(logs, { type: 'stderr-line', line: JSON.stringify({
+            level: 'warn', time: '2030-01-01T00:00:00Z', subsystem: '/private/' + privateSourceMarker,
+            message: privateMarker,
+          }) });
+        } else if (scenario === 'python-source') {
+          ingestLocalAgentLogEvent(logs, { type: 'stderr-line',
+            line: '2030-01-01 00:00:00 [WARNING] ' + privateSourceMarker + ': ' + privateMarker });
+        } else if (scenario === 'native-log-source') {
+          ingestLocalAgentLogEvent(logs, { type: 'stderr-line', line: 'redacted structured native record',
+            nativeLog: { level: 'warn', source: '/private/' + privateSourceMarker,
+              timestamp: '2030-01-01T00:00:00Z' } });
+        } else if (scenario === 'overflow') {
+          logs.ingest('stdout', 'x'.repeat(8 * 1024 * 1024 + 1));
+          logs.ingest('stdout', '\n');
+        } else if (scenario === 'unknown') {
+          ingestLocalAgentLogEvent(logs, { type: 'stderr-line', line: 'warning: ' + privateMarker });
+        } else if (scenario === 'report-control') {
+          ingestLocalAgentLogEvent(logs, { type: 'stderr-line', line: 'report=/private/' + privateMarker });
+        } else if (scenario === 'case-control') {
+          ingestLocalAgentLogEvent(logs, { type: 'stderr-line', line: '[model-eval-case] start ' + privateMarker });
+        } else if (scenario === 'unknown-level') {
+          ingestLocalAgentLogEvent(logs, { type: 'log', level: 'invalid\nreport=/private/' + privateMarker });
+        } else {
+          ingestLocalAgentLogEvent(logs, { type: 'log',
+            level: scenario === 'warning' ? 'warn' : scenario === 'error' ? 'error' : 'info', message: privateMarker });
+        }
+        const native = logs.finish();
+        const accepted = scenario === 'clean' || scenario === 'warning' || scenario.endsWith('-source');
+        const report = { aggregate: { score: 17 }, results: [{ cliLogAnalysis: native }] };
+        let calls = 0;
+        const code = await runLocalAgentLauncher({ ...options(), reportsDir, run: async (_command, _args, _settings, collector) => {
+          if (++calls === 2) {
+            fs.writeFileSync(file, JSON.stringify(report));
+            collector.ingest('stdout', 'report=' + file + '\n');
+          }
+          return { code: 0 };
+        } });
+        expect(calls).toBe(2);
+        // Prove the actual saved-report consumer accepts clean/warning native
+        // evidence before inspecting its schema. Child exit0 alone is insufficient.
+        expect(code).toBe(accepted ? 0 : 1);
+        const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+        expect(saved.aggregate).toEqual({ score: 17 });
+        expect(saved.results[0].cliLogAnalysis).toEqual(native);
+        expect(saved.logAcceptance).toEqual({ passed: accepted,
+          requiresReview: scenario !== 'clean', clean: scenario === 'clean' });
+        expect(native).toMatchObject({ passed: accepted, requiresReview: scenario !== 'clean',
+          coveragePassed: scenario !== 'overflow' });
+        if (scenario === 'warning') expect(native.levelCounts).toMatchObject({ warn: 1, error: 0 });
+        if (!accepted && scenario !== 'overflow') expect(native.levelCounts.error).toBeGreaterThan(0);
+        if (scenario === 'overflow') expect(native).toMatchObject({ capturedLineCount: 1, analyzedLineCount: 0, droppedLineCount: 1 });
+        expect(native.reportPaths).toEqual([]);
+        expect(JSON.stringify(saved)).not.toContain(privateMarker);
+        // Known native formats retain severity, not native-controlled source text.
+        // Check the full real saved report, including sourceCounts/findings.source.
+        expect(JSON.stringify(saved)).not.toContain(privateSourceMarker);
+        const fixedSources: Record<string, string> = {
+          'native-json-source': 'native-json', 'openclaw-source': 'openclaw-json',
+          'python-source': 'python-logger', 'native-log-source': 'native-structured',
+        };
+        if (fixedSources[scenario]) {
+          expect(native.levelCounts).toMatchObject({ warn: 1, error: 0 });
+          expect(native.sourceCounts).toEqual({ [fixedSources[scenario]]: 1 });
+          expect(native.findings).toEqual([expect.objectContaining({
+            severity: 'warning', code: 'runtime-warning', source: fixedSources[scenario], count: 1,
+          })]);
+        }
+      } finally { write.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+    });
 
   it('boots the real isolated Electron entry with a model-free TypeScript runner', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'local-cli-electron-'));

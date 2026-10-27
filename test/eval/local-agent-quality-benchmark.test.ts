@@ -86,21 +86,22 @@ describe('Local Agent quality benchmark contract', () => {
       target: 'codex_skills::interface' };
     const warning = analyze({ type: 'stderr-line', line: JSON.stringify(record) });
     expect(warning).toMatchObject({ passed: true, requiresReview: true, coveragePassed: true,
-      levelCounts: { warn: 1, error: 0 }, sourceCounts: { 'codex_skills::interface': 1 } });
+      levelCounts: { warn: 1, error: 0 }, sourceCounts: { 'native-json': 1 } });
+    expect(JSON.stringify(warning)).not.toContain(record.target);
     expect(analyze({ type: 'stderr-line', line: JSON.stringify({ ...record, level: 'ERROR' }) }))
       .toMatchObject({ passed: false, levelCounts: { error: 1 } });
     expect(analyze({ type: 'stderr-line', line: JSON.stringify({ ...record, level: 'ERROR',
       target: 'codex_core::tools::router', fields: { error: 'code-mode host closed its stdout' } }) }))
-      .toMatchObject({ passed: false, levelCounts: { error: 1 }, sourceCounts: { 'codex_core::tools::router': 1 } });
+      .toMatchObject({ passed: false, levelCounts: { error: 1 }, sourceCounts: { 'native-json': 1 } });
     for (const line of ['unexpected stderr', '{invalid', JSON.stringify({ ...record, level: 'UNKNOWN' }),
       JSON.stringify({ ...record, timestamp: 'invalid' }), JSON.stringify({ ...record, fields: {} })]) {
       expect(analyze({ type: 'stderr-line', line }).passed).toBe(false);
     }
     const openclaw = { time: '2026-10-19T05:04:00.000Z', level: 'warn', subsystem: 'codex/app-server', message: 'Fixture compatibility warning' };
     expect(analyze({ type: 'stderr-line', line: JSON.stringify(openclaw) }))
-      .toMatchObject({ passed: true, requiresReview: true, levelCounts: { warn: 1, error: 0 }, sourceCounts: { 'codex/app-server': 1 } });
+      .toMatchObject({ passed: true, requiresReview: true, levelCounts: { warn: 1, error: 0 }, sourceCounts: { 'openclaw-json': 1 } });
     expect(analyze({ type: 'stderr-line', line: JSON.stringify({ ...openclaw, level: 'error' }) }))
-      .toMatchObject({ passed: false, levelCounts: { error: 1 }, sourceCounts: { 'codex/app-server': 1 } });
+      .toMatchObject({ passed: false, levelCounts: { error: 1 }, sourceCounts: { 'openclaw-json': 1 } });
     expect(analyze({ type: 'log', level: 'info', message: 'connected' }))
       .toMatchObject({ passed: true, requiresReview: false, levelCounts: { info: 1 } });
     expect(analyze({ type: 'log', level: 'error', message: 'failed\nmore detail' }))
@@ -108,7 +109,7 @@ describe('Local Agent quality benchmark contract', () => {
     expect(analyze({ type: 'log', level: 'warn', message: 'review this' }))
       .toMatchObject({ passed: true, requiresReview: true, levelCounts: { warn: 1 } });
     expect(analyze({ type: 'stderr-line', line: '2026-10-19 12:15:15 [INFO] acp_adapter.server: ACP client connected' }))
-      .toMatchObject({ passed: true, levelCounts: { info: 1, error: 0 }, sourceCounts: { 'acp_adapter.server': 1 } });
+      .toMatchObject({ passed: true, levelCounts: { info: 1, error: 0 }, sourceCounts: { 'python-logger': 1 } });
     expect(analyze({ type: 'stderr-line', line: '2026-10-19 12:15:15 [WARNING] hermes_cli.plugins: Fixture warning' }))
       .toMatchObject({ passed: true, requiresReview: true, levelCounts: { warn: 1 } });
     expect(analyze({ type: 'stderr-line', line: '2026-10-19 12:15:15 [ERROR] acp_adapter.server: Fixture failure' }).passed).toBe(false);

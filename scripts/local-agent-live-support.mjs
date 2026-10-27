@@ -7,6 +7,7 @@
 
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
+import { createModelEvalLogCollector } from './model-eval-log-policy.mjs';
 
 export function localAgentLiveUsage() {
   return [
@@ -47,35 +48,7 @@ export async function waitForLiveCliExit(pids, { timeoutMs = 12_000, probe = pid
 
 /** Collect the established local-agent log protocol without retaining private messages. */
 export function createLocalAgentLogCollector(phase) {
-  const buffers = { stdout: '', stderr: '' };
-  const result = { phase, passed: true, capturedLineCount: 0, analyzedLineCount: 0,
-    levelCounts: { debug: 0, info: 0, warn: 0, error: 0 }, unclassifiedStderr: 0 };
-  const analyze = (stream, line) => {
-    result.capturedLineCount += 1;
-    result.analyzedLineCount += 1;
-    if (!line.trim()) return;
-    const record = line.match(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\] \[(debug|info|warn|error)\] \[\([^)]*\)\] /);
-    if (record) result.levelCounts[record[1]] += 1;
-    else if (stream === 'stderr') result.unclassifiedStderr += 1;
-  };
-  return {
-    ingest(stream, chunk) {
-      if (!(stream in buffers)) throw new Error('Unknown local-agent log stream');
-      buffers[stream] += String(chunk);
-      const lines = buffers[stream].split(/\r?\n/);
-      buffers[stream] = lines.pop();
-      for (const line of lines) analyze(stream, line);
-    },
-    finish() {
-      for (const stream of ['stdout', 'stderr']) {
-        if (buffers[stream]) analyze(stream, buffers[stream]);
-        buffers[stream] = '';
-      }
-      result.passed = result.levelCounts.error === 0 && result.unclassifiedStderr === 0
-        && result.capturedLineCount === result.analyzedLineCount;
-      return { ...result, levelCounts: { ...result.levelCounts } };
-    },
-  };
+  return createModelEvalLogCollector(phase);
 }
 
 /** Adapt native CLI diagnostics to the shared evaluator log protocol without
@@ -110,7 +83,7 @@ export function ingestLocalAgentLogEvent(collector, event) {
         && typeof record.timestamp === 'string' && Number.isFinite(Date.parse(record.timestamp))
         && typeof record.target === 'string' && /^[\w:./-]+$/.test(record.target)
         && typeof message === 'string') {
-        emit('stderr', level, record.target, message, new Date(record.timestamp).toISOString().slice(11, 23));
+        emit('stderr', level, 'native-json', message, new Date(record.timestamp).toISOString().slice(11, 23));
         return;
       }
       // OpenClaw's configured JSON console transport uses explicit time,
@@ -121,7 +94,7 @@ export function ingestLocalAgentLogEvent(collector, event) {
         && typeof record.subsystem === 'string' && /^[\w:./-]+$/.test(record.subsystem)
         && typeof record.message === 'string') {
         emit('stderr', level === 'fatal' ? 'error' : level === 'trace' ? 'debug' : level,
-          record.subsystem, record.message, new Date(record.time).toISOString().slice(11, 23));
+          'openclaw-json', record.message, new Date(record.time).toISOString().slice(11, 23));
         return;
       }
     } catch { /* Unknown native stderr remains fail-closed below. */ }
@@ -130,7 +103,7 @@ export function ingestLocalAgentLogEvent(collector, event) {
     const python = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL)\] ([\w.]+): (.*)$/.exec(line);
     if (python && Number.isFinite(Date.parse(python[1]))) {
       const level = python[2] === 'WARNING' ? 'warn' : python[2] === 'CRITICAL' ? 'error' : python[2].toLowerCase();
-      emit('stderr', level, python[3], python[4], `${python[1].slice(11)}.000`);
+      emit('stderr', level, 'python-logger', python[4], `${python[1].slice(11)}.000`);
       return;
     }
     const native = event.nativeLog;
@@ -139,17 +112,19 @@ export function ingestLocalAgentLogEvent(collector, event) {
       && typeof native.timestamp === 'string' && Number.isFinite(Date.parse(native.timestamp))) {
       // The production boundary already validated the complete record. Its
       // public text may be capped/redacted and is not a second JSON transport.
-      emit('stderr', native.level, native.source, 'Native CLI emitted a structured diagnostic.',
+      emit('stderr', native.level, 'native-structured', 'Native CLI emitted a structured diagnostic.',
         new Date(native.timestamp).toISOString().slice(11, 23));
       return;
     }
-    collector.ingest('stderr', `${line}\n`);
+    // Native diagnostics cannot introduce framework report/case control records
+    // or persist their private text through the shared collector's metadata.
+    emit('stderr', 'error', 'local-agent', 'Native CLI emitted an unclassified diagnostic.');
   } else if (event?.type === 'log') {
     const level = String(event.level ?? 'info').toLowerCase();
     if (/^(debug|info|warn|error)$/.test(level)) {
       emit('stdout', level, 'local-agent', String(event.message ?? ''));
     } else {
-      collector.ingest('stderr', `Unknown local-agent log level: ${level}\n`);
+      emit('stderr', 'error', 'local-agent', 'Native CLI emitted an unknown log level.');
     }
   } else if (event?.type === 'tool-event' && event.isError === true) {
     emit('stdout', 'warn', 'native-tool', 'Native tool failed; inspect the scenario result and subsequent recovery.');
