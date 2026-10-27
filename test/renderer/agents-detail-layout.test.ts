@@ -241,7 +241,7 @@ describe('external CLI Agent detail layout', () => {
 // cannot be checked against a release note or a support thread. The option
 // loop is run here directly so the assertions are the visible strings.
 describe('external CLI Agent model picker labels', () => {
-  const source = fs.readFileSync(path.join(rendererRoot, 'modules/agents.js'), 'utf8');
+  const source = fs.readFileSync(path.join(rendererRoot, 'modules/agents.js'), 'utf8').replace(/\r\n/g, '\n');
 
   function buildModelOptions(input: {
     models: Array<Record<string, unknown>>;
