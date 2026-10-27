@@ -9054,6 +9054,31 @@ function setupConversationStatusController(context: any, cid = 'c1', options = {
 }
 
 describe('conversation controller settlement', () => {
+  it.each([{ superseded: false, observerOnly: false }, { superseded: false, observerOnly: true }, { superseded: true, observerOnly: true }])('reconciles idle recovery without retiring a newer pending state ($superseded, observer controller: $observerOnly)', async ({ superseded, observerOnly }) => {
+    const context = loadConversationRenderer();
+    setupRunningObserverTestContext(context);
+    if (observerOnly) vm.runInContext(`
+      const observer = { abort() {} };
+      _convChatCtrls.set('c1', observer);
+      _groupObserverReservations.set('c1', observer);
+      pendingConvs.get('c1').controller = observer;
+    `, context);
+    const order: string[] = [];
+    let release: (response: any) => void = () => {};
+    context.apiFetch = () => new Promise(resolve => { release = resolve; });
+    context._recoverObservedConversationHistory = async () => { order.push('canonical reply'); return true; };
+    context._stopGroupEventObserver = () => order.push('stop observer');
+    context._settleDanglingActorPlaceholders = () => {};
+    context._removeEmptyStreamingPlaceholder = () => {};
+    context._syncTaskBoardForRuntimeState = () => {};
+    context._finishStreamingMsg = () => order.push('finish');
+    const syncing = context._syncPendingActorsFromRuntime('c1', { allowController: true });
+    if (superseded) context.pendingConvs.set('c1', { controller: null, aborted: false });
+    release({ json: async () => ({ ok: true, processing: false, active_turns: [], in_flight: [] }) });
+    await syncing;
+    expect(order).toEqual(superseded ? [] : ['canonical reply', 'stop observer', 'finish']);
+  });
+
   it('restores a rejected send before snapshot cleanup and ignores stale controllers', () => {
     const context = loadConversationRenderer();
     const { hooks, msg } = setupConversationStatusController(context, 'c1', { restoreComposerOnFailure: true });

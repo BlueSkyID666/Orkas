@@ -31,7 +31,7 @@ import { restoreInterruptedCliHistory } from './local_agents/interrupted-history
 import { DEFER_PROCESS_ITEMS, PROCESS_PAGE_REBUILD, PROCESS_PAGE_BYTES, processTextChunks, storeProcessPages, processSummary, readProcessPage, processPageReference } from './conversation-process-cache';
 
 const log = createLogger('conversation-history-cache');
-const CACHE_VERSION = 10;
+const CACHE_VERSION = 12;
 const MAX_INLINE_PROCESS_OUTPUT_BYTES = 1024;
 const MAX_FAILURE_OUTPUT_PREVIEW_CHARS = 600;
 const SOURCE_TAIL_FINGERPRINT_BYTES = 4 * 1024;
@@ -634,6 +634,8 @@ async function buildLatestPage(
       await fsp.rm(path.join(files.entryDir, 'latest-page-v7.json'), { force: true });
       await fsp.rm(path.join(files.entryDir, 'latest-page-v8.json'), { force: true });
       await fsp.rm(path.join(files.entryDir, 'latest-page-v9.json'), { force: true });
+      await fsp.rm(path.join(files.entryDir, 'latest-page-v10.json'), { force: true });
+      await fsp.rm(path.join(files.entryDir, 'latest-page-v11.json'), { force: true });
       return next;
     }
     // A message landed while the page was being projected. Keep the valid

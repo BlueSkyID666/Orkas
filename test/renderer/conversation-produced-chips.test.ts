@@ -327,7 +327,7 @@ describe('chat video layout', () => {
     expect(styleSource).not.toContain('.chat-msg-attach-video-shell');
   });
 
-  it('wires expanded markdown and floating-player surfaces to the shared playback toggle', () => {
+  it('wires expanded markdown surfaces to the shared playback toggle', () => {
     expect(source).not.toContain('data-chat-video-playback-surface="attachment_bubble"');
     expect(utilsSource).toContain('data-chat-video-playback-surface="markdown_bubble"');
     // Local and URL viewer entry points are exercised through their real DOM
