@@ -1084,6 +1084,33 @@ async function refreshAgentsAfterMarketplaceReconcile() {
   }
 }
 
+// Marketplace convergence can finish before its lazy browse UI is loaded.
+// This eager owner also covers the full catalog cached by the composer picker.
+async function _refreshMarketplaceCatalogsAfterChange() {
+  const jobs = [];
+  if (_agentsCache || _agentsLoadInFlight) {
+    jobs.push(['agents', () => refreshAgentsAfterMarketplaceReconcile()]);
+  }
+  if (typeof refreshSkillsAfterMarketplaceReconcile === 'function'
+      && ((typeof _skillsCache !== 'undefined' && _skillsCache)
+        || (typeof _skillsLoadInFlight !== 'undefined' && _skillsLoadInFlight))) {
+    jobs.push(['skills', () => refreshSkillsAfterMarketplaceReconcile()]);
+  }
+  if (typeof refreshMarketplaceAfterContentChange === 'function') {
+    jobs.push(['marketplace', () => refreshMarketplaceAfterContentChange()]);
+  }
+  await Promise.all(jobs.map(async ([kind, refresh]) => {
+    try { await refresh(); }
+    catch (_) { _agentsLog.warn('marketplace content refresh failed', { resource_kind: kind }); }
+  }));
+}
+
+if (typeof window.orkas?.onPushEvent === 'function') {
+  window.orkas.onPushEvent('marketplace:content-changed', () => {
+    _refreshMarketplaceCatalogsAfterChange();
+  });
+}
+
 /** Render the per-row "⋯" menu items based on the target agent's source +
  *  enabled state. Called fresh on each open so the toggle label is right
  *  and builtin agents see only the enable/disable item. */
@@ -2908,7 +2935,6 @@ function _switchAgentTab(tab) {
   // CLI discovery is process-heavy and belongs only to the External flow.
   // Start it when that panel actually becomes visible, not whenever the
   // default in-process create modal opens.
-  if (tab === 'external')
   if (tab === 'external' && typeof mountExternalCliSelect === 'function') {
     mountExternalCliSelect((cli) => _applyExternalCliDefaults(cli)).catch(() => {});
   }
@@ -3081,8 +3107,6 @@ function closeAgentModal(options = {}) {
 window.closeAgentModal = closeAgentModal;
 
 function cancelAgentModal() {
-  const activeTab = document.querySelector('#agent-modal-tabs .is-active')?.dataset.agentTab || 'create';
-  if (activeTab === 'external')
   closeAgentModal({ restoreFocus: true });
 }
 window.cancelAgentModal = cancelAgentModal;

@@ -139,6 +139,7 @@ protocol.registerSchemesAsPrivileged([
 import * as paths from './paths';
 import { serveFileRange as serveFileRangeCore } from './util/http-range';
 import {
+  type BootResourceClass,
   configureBootAdmission,
   noteBootUserActivity,
   registerDeferred,
@@ -217,6 +218,7 @@ import * as systemSkills from './features/system_skills';
 import * as bundledContentStartup from './features/bundled_content_startup';
 import * as builtinMarketplaceStartup from './features/builtin_marketplace_startup';
 import type { BuiltinMarketplaceSeedResult } from './features/builtin_marketplace';
+import { createMarketplaceCatalogReader } from './features/marketplace_catalog';
 import * as chatAttachments from './features/chat_attachments';
 import * as chatArtifacts from './features/chat_artifacts';
 import * as savedApps from './features/saved_apps';
@@ -817,7 +819,7 @@ async function runBootMaintenanceSweeps(): Promise<void> {
 let marketplaceReconcileStatusSubscribed = false;
 let marketplaceReconcileInFlight: Promise<void> | null = null;
 let marketplaceReconcileInFlightKey = '';
-const marketplaceDefaultsRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const marketplaceDefaultsRetryTasks = new Map<string, ReturnType<typeof scheduleBootBackground>>();
 const marketplaceDefaultsRetryAttempts = new Map<string, number>();
 
 function subscribeMarketplaceReconcileStatus(m: typeof import('./features/marketplace_reconcile')): void {
@@ -854,6 +856,7 @@ function broadcastBuiltinMarketplaceSeedChanged(result: BuiltinMarketplaceSeedRe
     pulled,
     updated_at: Date.now(),
   });
+  ipc.broadcastToRenderer('marketplace:content-changed', {});
 }
 
 async function seedBuiltinMarketplaceForCurrentUser(
@@ -874,14 +877,13 @@ function marketplaceBootContextStillActive(uid: string): boolean {
 }
 
 function clearMarketplaceDefaultsRetry(runKey: string): void {
-  const timer = marketplaceDefaultsRetryTimers.get(runKey);
-  if (timer) clearTimeout(timer);
-  marketplaceDefaultsRetryTimers.delete(runKey);
+  marketplaceDefaultsRetryTasks.get(runKey)?.cancel();
+  marketplaceDefaultsRetryTasks.delete(runKey);
   marketplaceDefaultsRetryAttempts.delete(runKey);
 }
 
 function scheduleMarketplaceDefaultsRetry(runKey: string, uid: string, error: string): void {
-  if (marketplaceDefaultsRetryTimers.has(runKey)) return;
+  if (marketplaceDefaultsRetryTasks.has(runKey)) return;
   const attempt = marketplaceDefaultsRetryAttempts.get(runKey) || 0;
   const delayMs = MARKETPLACE_DEFAULTS_RETRY_DELAYS_MS[attempt];
   if (delayMs === undefined) {
@@ -890,122 +892,159 @@ function scheduleMarketplaceDefaultsRetry(runKey: string, uid: string, error: st
     return;
   }
   marketplaceDefaultsRetryAttempts.set(runKey, attempt + 1);
-  const timer = setTimeout(() => {
-    marketplaceDefaultsRetryTimers.delete(runKey);
-    if (!marketplaceBootContextStillActive(uid)) {
+  const task = scheduleBootBackground(`marketplace-defaults-retry:${runKey}`, async (signal) => {
+    marketplaceDefaultsRetryTasks.delete(runKey);
+    // A retry can become eligible while the earlier network phases drain.
+    // Start a fresh pass afterward instead of joining and losing this retry.
+    if (marketplaceReconcileInFlightKey === runKey) {
+      await marketplaceReconcileInFlight?.catch(() => undefined);
+    }
+    if (signal?.aborted || !marketplaceBootContextStillActive(uid)) {
       marketplaceDefaultsRetryAttempts.delete(runKey);
       return;
     }
-    runMarketplaceInstallReconcile('marketplace-defaults-retry').catch((err) => {
-      marketplaceBootLog.warn('marketplace default installs retry failed', {
-        error: (err as Error).message,
-      });
+    await runMarketplaceInstallReconcile('marketplace-defaults-retry', signal).catch((err) => {
+      marketplaceBootLog.warn('marketplace default installs retry failed', { error: (err as Error).message });
     });
-  }, delayMs);
-  timer.unref?.();
-  marketplaceDefaultsRetryTimers.set(runKey, timer);
+  }, delayMs, { preferIdle: true, maxUserDeferralMs: 30_000, maxSliceMs: 60_000 });
+  marketplaceDefaultsRetryTasks.set(runKey, task);
   marketplaceBootLog.info('scheduled marketplace default installs retry', {
-    attempt: attempt + 1,
-    delay_ms: delayMs,
-    error,
+    attempt: attempt + 1, delay_ms: delayMs, error,
   });
 }
 
-async function runMarketplaceInstallReconcile(reason: string): Promise<void> {
+async function runMarketplaceInstallReconcile(reason: string, signal?: AbortSignal): Promise<void> {
   const uid = users.getActiveUserId();
-  if (!marketplaceBootContextStillActive(uid)) {
+  if (signal?.aborted || !marketplaceBootContextStillActive(uid)) {
     marketplaceBootLog.info('skip marketplace reconcile: local user unavailable', { reason });
     return;
   }
-
   const runKey = uid;
   if (marketplaceReconcileInFlight && marketplaceReconcileInFlightKey === runKey) {
     await marketplaceReconcileInFlight;
     return;
   }
-
-  const shouldContinue = (): boolean => marketplaceBootContextStillActive(uid);
+  const shouldContinue = (): boolean => !signal?.aborted && marketplaceBootContextStillActive(uid);
+  // Network waits must not reserve the disk queue. Cancellation stops queued
+  // phases; active work drains before returning, guarding publication itself.
+  const runStep = async (name: string, resourceClass: BootResourceClass, fn: () => Promise<void>): Promise<void> => {
+    if (!shouldContinue()) return;
+    let operation: Promise<void> | undefined;
+    const scheduled = scheduleBootBackground(`marketplace:${name}`, () => {
+      if (shouldContinue()) return operation = fn();
+    }, 0, { resourceClass, preferIdle: true, maxUserDeferralMs: 30_000 });
+    const cancel = (): void => scheduled.cancel();
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) cancel();
+    try {
+      await scheduled.promise;
+      await operation;
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+    }
+  };
   marketplaceReconcileInFlightKey = runKey;
   marketplaceReconcileInFlight = (async () => {
     let defaultSeedStatusActive = false;
     let marketplaceReconcileModule: typeof import('./features/marketplace_reconcile') | null = null;
+    let marketplaceModule: typeof import('./features/marketplace') | null = null;
     const clearDefaultSeedStatus = (): void => {
       if (marketplaceReconcileModule && defaultSeedStatusActive) {
         marketplaceReconcileModule.setDefaultInstallSeedStatus(false);
         defaultSeedStatusActive = false;
       }
     };
-
     try {
-      const [mp, m] = await Promise.all([
-        import('./features/marketplace'),
-        import('./features/marketplace_reconcile'),
-      ]);
-      marketplaceReconcileModule = m;
-      subscribeMarketplaceReconcileStatus(m);
-
-      await seedBuiltinMarketplaceForCurrentUser(reason, shouldContinue);
-
-      if (await mp.hasKnownDefaultInstallWork(uid)) {
-        m.setDefaultInstallSeedStatus(true);
-        defaultSeedStatusActive = true;
-      }
-
-      if (!shouldContinue()) {
-        clearDefaultSeedStatus();
-        return;
-      }
-
-      const builtinMarketplace = await import('./features/builtin_marketplace');
-      await builtinMarketplace.resolveBuiltinMarketplaceInstalls(uid, { shouldContinue }).catch((err) => {
-        marketplaceBootLog.warn('builtin marketplace resolve failed', { error: logErrorSummary(err) });
+      await runStep('local-content', 'disk', async () => {
+        await seedBuiltinMarketplaceForCurrentUser(reason, shouldContinue);
+        if (!shouldContinue()) return;
+        const [mp, m] = await Promise.all([
+          import('./features/marketplace'), import('./features/marketplace_reconcile'),
+        ]);
+        if (!shouldContinue()) return;
+        marketplaceModule = mp;
+        marketplaceReconcileModule = m;
+        subscribeMarketplaceReconcileStatus(m);
+        if (await mp.hasKnownDefaultInstallWork(uid)) {
+          if (!shouldContinue()) return;
+          m.setDefaultInstallSeedStatus(true);
+          defaultSeedStatusActive = true;
+        }
       });
-      if (!shouldContinue()) {
-        clearDefaultSeedStatus();
-        return;
-      }
-
-      const forceMarketplaceNetwork = reason === 'marketplace-defaults-retry';
-      const seeded = await mp.ensureDefaultInstalls(uid, {
-        shouldContinue,
-        minIntervalMs: forceMarketplaceNetwork ? 0 : MARKETPLACE_DEFAULTS_REFRESH_INTERVAL_MS,
-        force: forceMarketplaceNetwork,
+      await runStep('network', 'network', async () => {
+        const catalogReader = createMarketplaceCatalogReader(shouldContinue);
+        const builtinMarketplace = await import('./features/builtin_marketplace');
+        if (!shouldContinue()) return;
+        await builtinMarketplace.resolveBuiltinMarketplaceInstalls(uid, { shouldContinue, catalogReader }).catch((err) => {
+          marketplaceBootLog.warn('builtin marketplace resolve failed', { error: logErrorSummary(err) });
+        });
+        if (!shouldContinue()) return;
+        try {
+          const mp = marketplaceModule || await import('./features/marketplace');
+          const forceMarketplaceNetwork = reason === 'marketplace-defaults-retry';
+          const seeded = await mp.ensureDefaultInstalls(uid, {
+            shouldContinue,
+            minIntervalMs: forceMarketplaceNetwork ? 0 : MARKETPLACE_DEFAULTS_REFRESH_INTERVAL_MS,
+            force: forceMarketplaceNetwork,
+          });
+          if (!shouldContinue()) return;
+          if (seeded.failed) {
+            clearDefaultSeedStatus();
+            scheduleMarketplaceDefaultsRetry(runKey, uid, seeded.error || 'unknown error');
+          } else {
+            clearMarketplaceDefaultsRetry(runKey);
+          }
+          if ((seeded.seeded_agents || seeded.seeded_skills) && marketplaceReconcileModule && !defaultSeedStatusActive) {
+            marketplaceReconcileModule.setDefaultInstallSeedStatus(true);
+            defaultSeedStatusActive = true;
+          }
+        } catch (err) {
+          clearDefaultSeedStatus();
+          marketplaceBootLog.warn('default installs seed failed', { error: (err as Error).message });
+          if (shouldContinue()) scheduleMarketplaceDefaultsRetry(runKey, uid, (err as Error).message);
+        }
+        if (!shouldContinue()) return;
+        try {
+          const m = marketplaceReconcileModule || await import('./features/marketplace_reconcile');
+          await m.checkServerUpdatesForInstalls(uid, {
+            shouldContinue, minIntervalMs: MARKETPLACE_SERVER_CHECK_INTERVAL_MS, catalogReader,
+          });
+        } catch (err) {
+          clearDefaultSeedStatus();
+          marketplaceBootLog.warn('marketplace update check failed', { reason, error: logErrorSummary(err) });
+        }
       });
-      if (seeded.failed) {
-        clearDefaultSeedStatus();
-        scheduleMarketplaceDefaultsRetry(runKey, uid, seeded.error || 'unknown error');
-      } else {
-        clearMarketplaceDefaultsRetry(runKey);
-      }
-      if ((seeded.seeded_agents || seeded.seeded_skills) && !defaultSeedStatusActive) {
-        m.setDefaultInstallSeedStatus(true);
-        defaultSeedStatusActive = true;
-      }
-
-      if (!shouldContinue()) {
-        clearDefaultSeedStatus();
-        return;
-      }
-
-      await m.checkServerUpdatesForInstalls(uid, {
-        shouldContinue,
-        minIntervalMs: MARKETPLACE_SERVER_CHECK_INTERVAL_MS,
+      await runStep('reconcile', 'network', async () => {
+        try {
+          const m = marketplaceReconcileModule || await import('./features/marketplace_reconcile');
+          const result = await m.reconcileInstalls(uid, { shouldContinue });
+          if (!shouldContinue()) return;
+          if (
+            result.pulled_agents || result.pulled_skills
+            || result.pruned_agents || result.pruned_skills
+            || result.restored_agents || result.restored_skills
+            || result.patched_agents || result.patched_skills
+          ) {
+            ipc.broadcastToRenderer('marketplace:content-changed', {});
+            marketplaceBootLog.info('marketplace install reconcile completed', { reason, ...result });
+          }
+        } catch (err) {
+          clearDefaultSeedStatus();
+          marketplaceBootLog.warn('marketplace reconcile failed', { reason, error: (err as Error).message });
+        }
       });
-      const result = await m.reconcileInstalls(uid, { shouldContinue });
-      if (
-        result.pulled_agents || result.pulled_skills
-        || result.pruned_agents || result.pruned_skills
-        || result.restored_agents || result.restored_skills
-        || result.patched_agents || result.patched_skills
-      ) {
-        marketplaceBootLog.info('marketplace install reconcile completed', { reason, ...result });
-      }
+      await runStep('local-repair', 'disk', async () => {
+        try {
+          const skills = await import('./features/skills');
+          if (shouldContinue()) await skills.repairLegacySkillEnabledIdsForActiveUser();
+        } catch (err) {
+          marketplaceBootLog.warn('legacy skill enabled-state repair failed', { error: logErrorSummary(err) });
+        }
+      });
     } catch (err) {
+      marketplaceBootLog.warn('marketplace install reconcile failed', { reason, error: (err as Error).message });
+    } finally {
       clearDefaultSeedStatus();
-      marketplaceBootLog.warn('marketplace install reconcile failed', {
-        reason,
-        error: (err as Error).message,
-      });
     }
   })().finally(() => {
     if (marketplaceReconcileInFlightKey === runKey) {
@@ -1777,7 +1816,7 @@ if (!gotLock) {
       }));
       projectDriverRunner.startDriverScheduler();
     });
-    registerDeferred('marketplace:reconcile', () => runMarketplaceInstallReconcile('startup'));
+    registerDeferred('marketplace:reconcile', (signal) => runMarketplaceInstallReconcile('startup', signal));
 
     registerDeferred('boot:maintenance-sweeps', () => runBootMaintenanceSweeps(), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('browser:http-cache', async (signal) => {
