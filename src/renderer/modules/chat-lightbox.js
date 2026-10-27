@@ -68,6 +68,33 @@ function _absPathFromChatMediaLocalUrl(src) {
   return p.startsWith('/') ? p : `/${p}`;
 }
 
+function _lightboxSetCurrentFile(fileOpts) {
+  _lightboxCurrentFile = fileOpts && fileOpts.absPath ? {
+    absPath: fileOpts.absPath,
+    cid: fileOpts.cid || null,
+    projectId: fileOpts.projectId || null,
+  } : null;
+  if (_lightboxAddLibraryBtn) _lightboxAddLibraryBtn.hidden = !_lightboxCanAddToLibrary(_lightboxCurrentFile);
+  if (_lightboxRevealBtn) _lightboxRevealBtn.hidden = !_lightboxCurrentFile;
+}
+
+async function _lightboxResolveAttachment(src, sequence) {
+  try {
+    const url = new URL(src);
+    if (url.protocol !== 'chat-media:' || url.host !== 'cid') return;
+    const parts = decodeURIComponent(url.pathname).replace(/^\/+/, '').split('/');
+    if (parts.length !== 2 || parts.some(part => !part || part.includes('\\'))) return;
+    const [cid, name] = parts;
+    // Use the same resolver as the media protocol; never infer storage layout
+    // or attach an image to whichever conversation happens to be selected.
+    const result = await window.orkas.invoke('attachments.absPath', { cid, name });
+    if (sequence !== _lightboxLoadSeq || !_isOpen()) return;
+    if (result?.ok && typeof result.path === 'string' && result.path) {
+      _lightboxSetCurrentFile({ absPath: result.path, cid });
+    }
+  } catch (_) { /* Keep the preview usable; reopening retries unavailable file actions. */ }
+}
+
 function _isOpen() {
   return !!(_lightboxEl && _lightboxEl.classList.contains('is-open'));
 }
@@ -533,15 +560,10 @@ function openChatImageLightbox(src, alt, opts) {
   const fileOpts = (opts && opts.absPath)
     ? opts
     : (inferredAbsPath ? { absPath: inferredAbsPath, cid: opts?.cid || fallbackCid } : null);
-  _lightboxCurrentFile = fileOpts && fileOpts.absPath ? {
-    absPath: fileOpts.absPath,
-    cid: fileOpts.cid || null,
-    projectId: fileOpts.projectId || null,
-  } : null;
-  if (_lightboxAddLibraryBtn) _lightboxAddLibraryBtn.hidden = !_lightboxCanAddToLibrary(_lightboxCurrentFile);
-  if (_lightboxRevealBtn) _lightboxRevealBtn.hidden = !_lightboxCurrentFile;
+  _lightboxSetCurrentFile(fileOpts);
   el.classList.add('is-open');
   el.setAttribute('aria-hidden', 'false');
+  if (!_lightboxCurrentFile) void _lightboxResolveAttachment(src, loadSeq);
   if (!wasOpen) el.querySelector('.chat-lightbox-close').focus({ preventScroll: true });
   _updateLightboxNavigation();
   if (!_lightboxKeyHandler) {

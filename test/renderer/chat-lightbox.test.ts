@@ -24,6 +24,88 @@ function loadLightbox() {
   return context;
 }
 
+function mountedLightbox() {
+  const context = loadLightbox();
+  context.t = (key: string) => key;
+  context.document.removeEventListener = vi.fn();
+  const elements = new Map<string, any>();
+  const element = (key: string) => {
+    if (!elements.has(key)) {
+      const classes = new Set<string>();
+      elements.set(key, { style: {}, hidden: false,
+        classList: { contains: (name: string) => classes.has(name),
+          add: (name: string) => classes.add(name), remove: (name: string) => classes.delete(name), toggle: vi.fn() },
+        setAttribute: vi.fn(), removeAttribute: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), focus: vi.fn() });
+    }
+    return elements.get(key);
+  };
+  context.element = element;
+  vm.runInContext(`
+    _lightboxEl = element('root'); _lightboxEl.querySelector = element;
+    _lightboxImg = element('image');
+    _lightboxAddLibraryBtn = element('library'); _lightboxRevealBtn = element('reveal');
+  `, context);
+  const visibility = () => ['library', 'reveal'].map(key => !element(key).hidden);
+  return { context, element, visibility };
+}
+
+describe('attachment image action recovery', () => {
+  it('resolves the image owner on first open and reveals the resolved file', async () => {
+    const { context, visibility } = mountedLightbox();
+    const invoke = vi.fn(async () => ({ ok: true, path: '/fixtures/cover art.png' }));
+    context.window.orkas = { invoke };
+    context.openChatImageLightbox('chat-media://cid/source-chat/cover%20art.png', 'generated image', { cid: 'current-chat' });
+    await vi.waitFor(() => expect(visibility()).toEqual([true, true]));
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('attachments.absPath', { cid: 'source-chat', name: 'cover art.png' });
+    await context._onLightboxReveal({ stopPropagation: vi.fn() });
+    expect(invoke).toHaveBeenLastCalledWith('workspace.revealPath', { path: '/fixtures/cover art.png', cid: 'source-chat' });
+  });
+
+  it.each(['replace', 'close'])('ignores resolution after %s and never transfers file ownership', async (action) => {
+    const { context, visibility } = mountedLightbox();
+    let finish!: (value: any) => void;
+    context.window.orkas = { invoke: vi.fn(() => new Promise(resolve => { finish = resolve; })) };
+    context.openChatImageLightbox('chat-media://cid/old/old.png', 'old');
+    expect(context.window.orkas.invoke).toHaveBeenCalledOnce();
+    if (action === 'close') context.closeChatImageLightbox();
+    else context.openChatImageLightbox('https://example.com/new.png', 'new');
+    finish({ ok: true, path: '/fixtures/old.png' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(visibility()).toEqual([false, false]);
+    await context._onLightboxReveal({ stopPropagation: vi.fn() });
+    expect(context.window.orkas.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the image open on lookup failure and retries when reopened', async () => {
+    const { context, visibility, element } = mountedLightbox();
+    context.window.orkas = { invoke: vi.fn().mockRejectedValueOnce(new Error('unavailable'))
+      .mockResolvedValueOnce({ ok: false }).mockResolvedValueOnce({ ok: true, path: '/fixtures/retry.png' }) };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      context.openChatImageLightbox('chat-media://cid/task/retry.png', 'retry');
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(visibility()).toEqual(Array(2).fill(attempt === 2));
+      expect(element('image').src).toBe('chat-media://cid/task/retry.png');
+      expect(context._isOpen()).toBe(true);
+    }
+    expect(context.window.orkas.invoke).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not resolve remote, malformed, or already-owned image sources', () => {
+    const { context, visibility } = mountedLightbox();
+    context.window.orkas = { invoke: vi.fn() };
+    for (const src of ['https://example.com/cover.png', 'chat-media://cid/task/%E0%A4%A.png',
+      'chat-media://cid/task/folder%2Fcover.png', 'chat-media://cid/task/']) {
+      context.openChatImageLightbox(src, 'image');
+      expect(visibility()).toEqual([false, false]);
+    }
+    context.openChatImageLightbox('chat-media://cid/task/cover.png', 'image', { absPath: '/fixtures/cover.png', cid: 'task' });
+    expect(visibility()).toEqual([true, true]);
+    context.openChatImageLightbox('chat-media://local/fixtures/cover.png', 'image', { cid: 'task' });
+    expect(visibility()).toEqual([true, true]);
+    expect(context.window.orkas.invoke).not.toHaveBeenCalled();
+  });
+});
+
 describe('chat image lightbox file ownership', () => {
   it('forwards an outside image path when the user clicks reveal and re-enables the button', async () => {
     const context = loadLightbox();

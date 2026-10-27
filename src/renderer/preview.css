@@ -36,6 +36,7 @@
 .preview-window .chat-file-viewer-actions:focus-within,
 .preview-window .chat-lightbox-actions:hover,
 .preview-window .chat-lightbox-actions:focus-within { opacity: 1; }
+.preview-window .chat-lightbox-actions:not(:has(> button:not([hidden]):not(.chat-lightbox-close))) { display: none; }
 .preview-window .chat-lightbox-actions > button {
   width: 28px; height: 28px; background: transparent; box-shadow: none;
 }

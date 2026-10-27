@@ -186,6 +186,8 @@ else if (process.argv.slice(2).join(' ') === 'update') {
 `); chmodSync(file, 0o755);
   }
   symlinkSync(path.join(directory, '2.1.112'), bin);
+  // Finish any startup probe before replacing its fixture executable.
+  await app.invoke('localAgents.detect', { type: 'claude' });
   await app.electronApp!.evaluate((_electron, file) => { process.env.ORKAS_CLAUDE_PATH = file; }, bin);
   const detected = await app.invoke<any>('localAgents.detect', { type: 'claude' });
   expect(detected.entry).toMatchObject({ available: true, version: '2.1.112' });
@@ -205,6 +207,48 @@ else if (process.argv.slice(2).join(' ') === 'update') {
   expect(readFileSync(calls, 'utf8')).toBe('update\n');
   expect(app.readCliState().invocations).toHaveLength(0);
   await page.screenshot({ path: testInfo.outputPath('12-claude-upgrade-success.png') });
+  // Hold discovery at the renderer boundary after a real native update. A
+  // locale refresh must retain that feedback, and older completions must not
+  // replace the version displayed by the latest refresh.
+  const response = await app.invoke<any>('agents.get', { agent_id: created.agent.agent_id });
+  await page.evaluate(agent => {
+    const w = window as any;
+    w.__upgradeDiscoveryOriginal = w.loadLocalCliEntries;
+    w.__upgradeDiscoveries = [];
+    w.loadLocalCliEntries = () => new Promise(resolve => w.__upgradeDiscoveries.push(resolve));
+    w.__upgradeRefreshes = [w._renderAgentDetailRuntime(agent), w._renderAgentDetailRuntime(agent)];
+  }, response.agent);
+  try {
+    await expect(control.locator('[role="status"]')).toHaveText('升级成功');
+    await expect(page.locator('#agents-detail-runtime .ai-select-trigger')).toBeDisabled();
+    await page.screenshot({ path: testInfo.outputPath('13-pending-feedback-zh.png') });
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await page.evaluate(async () => { await (window as any).setLang('en'); });
+    await expect.poll(() => page.evaluate(() => (window as any).__upgradeDiscoveries.length)).toBe(3);
+    await expect(control.locator('[role="status"]')).toHaveText('Upgrade successful');
+    await expect(control.locator('button')).toHaveText('Upgrade CLI');
+    await page.screenshot({ path: testInfo.outputPath('14-pending-feedback-en-narrow.png') });
+    await page.evaluate(async () => {
+      const w = window as any;
+      w.__upgradeDiscoveries[2]([{ type: 'claude', available: true, version: '2.1.113' }]);
+      await Promise.resolve();
+      for (const resolve of w.__upgradeDiscoveries.slice(0, 2)) {
+        resolve([{ type: 'claude', available: true, version: '2.1.112' }]);
+      }
+      await Promise.all(w.__upgradeRefreshes);
+    });
+    await expect(page.locator('#agents-detail-runtime .ai-select-trigger')).toContainText('2.1.113');
+    await expect(control.locator('[role="status"]')).toHaveText('Upgrade successful');
+    await expect(control.locator('button')).toBeEnabled();
+    expect(readFileSync(calls, 'utf8')).toBe('update\n');
+    expect(app.readCliState().invocations).toHaveLength(0);
+  } finally {
+    await page.evaluate(() => {
+      const w = window as any;
+      w.loadLocalCliEntries = w.__upgradeDiscoveryOriginal;
+      delete w.__upgradeDiscoveryOriginal; delete w.__upgradeDiscoveries; delete w.__upgradeRefreshes;
+    });
+  }
 });
 
 

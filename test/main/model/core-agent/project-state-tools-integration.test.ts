@@ -92,6 +92,31 @@ async function setupProjectStateTools() {
 }
 
 describe('project state tools → durable feature stores', () => {
+  it.each(['private', 'global'])('replays the pause-time same-status tool call without mutating %s tasks', async scope => {
+    const { projectTasks, pid: projectId } = await setupProjectStateTools();
+    const pid = scope === 'private' ? projectId : '';
+    const { createProjectTasksHandler } = await import('../../../../src/main/features/project_tasks_tool_handler');
+    const storage = await import('../../../../src/main/storage');
+    const clock = vi.spyOn(storage, 'nowIso').mockReturnValue('2026-10-23T16:21:17');
+    try {
+      const created = await projectTasks.createTask(UID, pid, { content: 'Held dependent task' });
+      if (!created.ok) throw new Error('task fixture failed');
+      const { projectTaskFile, userTaskFile } = await import('../../../../src/main/paths');
+      const file = pid ? projectTaskFile(UID, pid, created.task.id) : userTaskFile(UID, created.task.id);
+      const bytes = fs.readFileSync(file, 'utf8');
+      const events: unknown[] = [];
+      projectTasks.onTasksChanged(event => events.push(event));
+      clock.mockReturnValue('2026-10-23T16:21:58');
+      const tool = createProjectTasksTool(createProjectTasksHandler(UID, pid, 'pause-chat', new Map()), { globalScope: !pid });
+      const result = await tool.execute({ action: 'update', task_id: created.task.id, status: 'todo' }, { state: {} });
+      expect(result.isError).toBe(false);
+      expect(JSON.parse(result.content)).toMatchObject({ ok: true, task: { id: created.task.id, status: 'todo' } });
+      expect(await projectTasks.getTask(UID, pid, created.task.id)).toEqual(created.task);
+      expect(fs.readFileSync(file, 'utf8')).toBe(bytes);
+      expect(events).toEqual([]);
+    } finally { clock.mockRestore(); }
+  });
+
   it('resolves global task owners only from the enabled account registry and rejects scope overrides', async () => {
     const agents = await import('../../../../src/main/features/agents');
     const users = await import('../../../../src/main/features/users');

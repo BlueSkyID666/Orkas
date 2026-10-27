@@ -2,39 +2,27 @@
 
 **An open-source team of AI agents on your desktop — it turns your goals into finished work and keeps it moving.**
 
+Orkas is an open-source (MIT), local-first multi-agent desktop app — an AI assistant that works as a team. Tell the **Commander** what you need: it finishes many tasks on its own, and for bigger work it plans the steps and brings in specialist agents along with the coding and personal agents you already use — **Claude Code, Codex, OpenCode, OpenClaw and Hermes-Agent** — to work on it together.
+
+Orkas is built to keep a project moving, not just answer one prompt. A **project** holds the goal, rules, memory and files, so every new conversation picks up where the last one left off. **To-dos** split the work between people and agents, **Auto-advance** lets the team take on the next to-do by itself, and **scheduled automations** repeat routine work hourly, daily, weekly or monthly. All your data stays on your computer, and finished work comes back for your review — so you can trust Orkas with the ongoing work of your business.
+
 **[⬇ Download Orkas for macOS & Windows](https://orkas.ai/download/?source=gh-orkas&entry_point=github_readme&download=1)** — free, with 500 credits for the built-in Orkas model, so you don't need an API key to start. Prefer your own keys? Claude · OpenAI · Gemini · DeepSeek · Kimi · GLM · Qwen · MiniMax · Doubao, or a local OpenAI-compatible endpoint.
 
 [![Download for macOS & Windows](https://img.shields.io/badge/Download-macOS%20%26%20Windows-5b57d6?style=for-the-badge)](https://orkas.ai/download/?source=gh-orkas&entry_point=github_readme&download=1)
 
-Orkas is an open-source (MIT), local-first multi-agent desktop app — an AI assistant that works as a team. Describe a goal and the **Commander** turns it into to-dos, handles the general parts itself, and coordinates **16 built-in specialist agents** — research, writing, slides, video, voice, design, code, SEO and e-commerce — plus the coding and personal agents you already use: **Claude Code, Codex, OpenCode, OpenClaw and Hermes-Agent**. Projects keep goals, memory and files together; Auto-advance and scheduled automations keep the work moving; finished work comes back for your review.
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
-[![Stars](https://img.shields.io/github/stars/Orkas-AI/Orkas?style=social)](https://github.com/Orkas-AI/Orkas/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/Orkas-AI/Orkas?style=flat&logo=github&label=Stars&color=yellow)](https://github.com/Orkas-AI/Orkas/stargazers)
 [![Release](https://img.shields.io/github/v/release/Orkas-AI/Orkas?color=blue)](https://github.com/Orkas-AI/Orkas/releases)
 [![X: @leochenpm](https://img.shields.io/badge/X-%40leochenpm-black?logo=x)](https://x.com/leochenpm)
+[![Website: orkas.ai](https://img.shields.io/badge/Website-orkas.ai-5b57d6)](https://orkas.ai/?source=gh-orkas)
 
 [English](./README.md) · [简体中文](./README.zh-CN.md)
 
 ---
 
-https://github.com/user-attachments/assets/9e5ee6d2-6f53-4c34-ac46-df2f5e6f7e56
+https://github.com/user-attachments/assets/4f8b16c8-a192-45a4-b19f-80e8d02c3dab
 
----
-
-## Keep the work moving
-
-One task is a good start. Orkas is built for the work that keeps going.
-
-- **Projects** — goals & rules, memory and files that every conversation in the project starts from, so you never brief from scratch.
-- **To-dos and Auto-advance** — every project has a to-do list for people and agents; with Auto-advance on, the team picks up the next item on its own and brings finished work back for your review.
-- **Scheduled automations** — run any task hourly, daily, weekly or monthly. Orkas runs on your computer. From v1.9, each automation catches up its most recent missed run within 12 hours when the computer wakes or Orkas starts.
-- **Connectors** — Gmail, Google Calendar, Sheets and Drive, Notion, Slack, Shopify, Stripe and many more. By default, Orkas asks before it sends, posts or deletes anything.
-- **Apps** — describe a tool and Orkas builds it as a local app inside the desktop app. On a paid plan, publish it as a web app with a public link.
-- **Shared projects** — invite a teammate or VA, and give each to-do to a person or an agent.
-
-Cloud sync, shared projects and web-app publishing are part of the packaged app; most of the rest also works in the source build.
-
-Voice input also works in the source build. Configure an **Orkas API Key** in **Settings → Models**, then click the microphone beside a composer. Allow microphone access when prompted. Audio is sent to Orkas for recognition and uses the key owner’s Orkas credits. Click again to stop, review the text, and send it yourself. If access was denied, enable the microphone in your system settings.
+![Orkas desktop — task conversation and deliverables](./resources/app-ui/task-en.png)
 
 ---
 
@@ -46,8 +34,9 @@ Voice input also works in the source build. Configure an **Orkas API Key** in **
 - **Websites, UI and code** — UIDesigner, ProductDeveloper
 - **Word, Excel, PowerPoint and PDF files** — OfficeWorker
 - **E-commerce work** — product research, listings, review analysis, sales analysis and catalog changes, from five e-commerce agents
+- **Complex work that takes several agents** — the Commander splits it up, hands each part to the right agent and combines the results; for example, market research that becomes a report, a slide deck and a launch video
 
-Sixteen specialists ship with the app, each with its own skills, memory and tools. Browse 30+ agents in the [agent marketplace](https://orkas.ai/views/marketplace/gs/agents/?source=gh-orkas), or describe the role you need and the Commander builds a custom agent for you.
+16 specialists ship with the app, each with its own skills, memory and tools. Browse 30+ agents in the [agent marketplace](https://orkas.ai/views/marketplace/gs/agents/?source=gh-orkas), or describe the role you need and the Commander builds a custom agent for you.
 
 <details>
 <summary><b>All 16 built-in agents</b></summary>
@@ -77,7 +66,25 @@ More on each agent → [orkas.ai/agents](https://orkas.ai/agents/?source=gh-orka
 
 ---
 
-## Run Claude Code, Codex and OpenCode together
+## Keep the work moving
+
+One task is a good start. Orkas is built for the work that keeps going.
+
+- **Projects** — goals & rules, memory and files that every conversation in the project starts from, so you never brief from scratch.
+- **To-dos and Auto-advance** — every project has a to-do list for people and agents; with Auto-advance on, the team picks up the next item on its own and brings finished work back for your review.
+- **Scheduled automations** — run any task hourly, daily, weekly or monthly. Orkas runs on your computer. From v1.9, each automation catches up its most recent missed run within 12 hours when the computer wakes or Orkas starts.
+- **Connectors** — Gmail, Google Calendar, Sheets and Drive, Notion, Slack, Shopify, Stripe and many more. By default, Orkas asks before it sends, posts or deletes anything.
+- **Apps** — describe a tool and Orkas builds it as a local app inside the desktop app. In the packaged app, paid plans can also publish it as a web app with a public link.
+- **Shared projects** *(packaged app)* — invite a teammate or VA, and give each to-do to a person or an agent.
+
+> [!NOTE]
+> Shared projects, cloud sync and web-app publishing are only in the packaged app — the open-source build doesn't support them yet. To use them, **[download Orkas for macOS & Windows](https://orkas.ai/download/?source=gh-orkas&entry_point=github_readme&download=1)** (free, with 500 credits to start).
+
+Voice input also works in the source build. Configure an **Orkas API Key** in **Settings → Models**, then click the microphone beside a composer. Allow microphone access when prompted. Audio is sent to Orkas for recognition and uses the key owner’s Orkas credits. Click again to stop, review the text, and send it yourself. If access was denied, enable the microphone in your system settings.
+
+---
+
+## Run Claude Code, Codex, OpenCode, OpenClaw and Hermes-Agent together
 
 Orkas runs the CLI agents you already have installed as local sessions, next to its own specialists — the coding agents **Claude Code, Codex and OpenCode**, and the personal agents **OpenClaw and Hermes-Agent**. The Commander hands each one the part it's best at and keeps one plan across all of them, so a single chat can fix the bug, review the change and draft the release note. Open-source tools such as HyperFrames plug in the same way.
 
@@ -128,7 +135,8 @@ The download link detects your system and starts the right installer.
 
 | Tool | What it is | How Orkas differs |
 | --- | --- | --- |
-| **Claude Cowork** | Anthropic's agentic desktop experience, built on Claude. | Orkas is open source (MIT) and model-agnostic — the built-in Orkas model or your own keys from any provider — and coordinates Claude Code, Codex and OpenCode alongside its own specialists. [Claude Cowork alternatives →](https://orkas.ai/compare/claude-cowork-alternatives/?source=gh-orkas) |
+| **Claude Code** | Anthropic's agentic coding tool — in the terminal, IDE, desktop and web, built on Claude models. | Not either-or: Orkas runs Claude Code as one of its agents. Around it, Orkas adds a model-agnostic team for the work beyond code — research, content, video and more — with projects, to-dos and automations that keep it moving. [Orkas vs Claude Code →](https://orkas.ai/compare/orkas-vs-claude-code/?source=gh-orkas) |
+| **Codex** | OpenAI's coding agent — in the terminal, your editor and the cloud. | Not either-or: Orkas runs Codex as one of its agents, next to Claude Code and OpenCode. The Commander can hand the coding to Codex and the review to another agent, then cover the non-code half of a release — docs, launch posts and videos. [Orkas vs Codex →](https://orkas.ai/compare/orkas-vs-codex/?source=gh-orkas) |
 | **LangChain** | A developer framework/library for building LLM apps and agents — code-first, embedded in your own Python/JS app. | Orkas is a desktop app you direct through chat, not by writing orchestration code. Data stays local by default. |
 | **CrewAI** | A Python framework for orchestrating role-playing autonomous agents — you define crews and agents in code. | Orkas brings multi-agent orchestration into a desktop app, with projects, to-dos, automations and per-agent self-improvement built in. |
 | **OpenClaw** | A personal-agent platform with messaging integrations, multi-agent routing and sub-agents. | Orkas provides a desktop workspace for finished deliverables, with built-in specialists and coordination across Claude Code, Codex, OpenCode and other CLI agents. OpenClaw can join that workflow as a CLI agent. |
@@ -140,53 +148,7 @@ The download link detects your system and starts the right installer.
 
 **Choosing between coding agents?** [Codex vs OpenCode](https://orkas.ai/compare/codex-vs-opencode/?source=gh-orkas) · [Claude Code vs Codex vs OpenCode](https://orkas.ai/compare/claude-code-vs-codex-vs-opencode/?source=gh-orkas) · [Claude Code alternatives](https://orkas.ai/compare/claude-code-alternatives/?source=gh-orkas)
 
-**Full side-by-side comparisons →** [vs Claude Code](https://orkas.ai/compare/orkas-vs-claude-code?source=gh-orkas) · [vs Cline](https://orkas.ai/compare/orkas-vs-cline?source=gh-orkas) · [vs LangChain](https://orkas.ai/compare/orkas-vs-langchain?source=gh-orkas) · [vs ChatGPT](https://orkas.ai/compare/orkas-vs-chatgpt?source=gh-orkas) · [vs OpenClaw](https://orkas.ai/compare/orkas-vs-openclaw?source=gh-orkas) · [vs Hermes-Agent](https://orkas.ai/compare/orkas-vs-hermes-agent?source=gh-orkas)
-
----
-
-## FAQ
-
-**What is Orkas?**
-Orkas is an open-source (MIT), local-first multi-agent desktop app. Its Commander turns your goal into to-dos and coordinates 16 built-in specialist agents — plus Claude Code, Codex, OpenCode, OpenClaw and Hermes-Agent — to deliver finished files. Not a single chatbot, not a code framework, not a hosted SaaS.
-
-**Do I need an API key?**
-No. The packaged app comes with 500 credits for the built-in Orkas model. After that, buy credits, choose a paid plan or add your own provider keys; provider charges are separate.
-
-**Is Orkas a local LLM?**
-No. Orkas runs on your machine and calls the models you choose — the built-in Orkas model, your own API keys, or a local model endpoint. It orchestrates agents and tools; it is not itself a model.
-
-**Can Orkas answer questions from my documents, with citations?**
-Yes. Add PDFs and documents to your local Library; Orkas can search them and answer with citations to source passages, so you can open the original and check. The index is built on your machine.
-
-**Can I use local models like Ollama or LM Studio?**
-Yes. Open **Account settings → Models → Chat → Add model → Custom**, select **OpenAI-compatible** or **Anthropic-compatible**, and enter the base URL, exact model ID, and API key. Choose the saved model from the task's model control.
-
-**Where are my API keys and data stored?**
-On your disk by default. Your own provider keys are encrypted locally and excluded from cloud sync. With your own keys, model calls go straight from your machine to the provider; the built-in Orkas model uses Orkas's managed service. Optional cloud sync and shared projects in the packaged app store the selected data on Orkas servers. [Security and data handling →](https://orkas.ai/security/?source=gh-orkas)
-
-**Does Orkas work offline?**
-The source build can run fully offline against a local model endpoint. The packaged app needs to sign in, and cloud models need a network connection.
-
-**Does it keep working when my computer is off?**
-No — Orkas runs on your computer, so Auto-advance and automations need the computer awake and Orkas running. From v1.9, each automation catches up its most recent missed run within 12 hours when the computer wakes or Orkas starts.
-
-**Can I build and publish apps?**
-Yes. Local apps that run inside Orkas are free. Publishing a web app to a public link needs a paid plan (Lite 5, Pro 8, Max 15 apps), and published web apps don't include every capability available inside Orkas.
-
-**Do I need an Orkas account?**
-The packaged desktop app asks you to sign in when you first launch it. The source build in this repository has no account layer at all — it boots straight into the app.
-
-**Can Orkas drive Claude Code and other CLI agents?**
-Yes. Orkas can drive five external CLI agents as local subprocesses — the coding agents Claude Code, Codex and OpenCode, plus the personal agents OpenClaw and Hermes-Agent — and onboard open-source projects like HyperFrames, all directed from the same chat.
-
-**How is Orkas different from Claude Cowork / Claude Desktop / CrewAI / LangChain?**
-Claude Cowork and Claude Desktop are built on Claude alone; CrewAI and LangChain are code-first frameworks. Orkas is an open-source desktop app where a Commander coordinates a team of specialist agents and your CLI agents, with any model provider, and keeps data and keys local. See the [full comparisons](https://orkas.ai/compare/?source=gh-orkas).
-
-**Which platforms does Orkas support?**
-macOS 12+ (Apple Silicon and Intel) and Windows 10+ have packaged installers. glibc 2.34+ Linux x64/arm64 runs from source today, with no installer yet. Local speech transcription is supported on Linux through the pinned whisper.cpp runtime prepared on first launch. Alpine and other musl-based distributions are not supported. The source bootstrap needs Node 22.12+; Python 3 and a C/C++ build toolchain are needed only when a native npm package has no compatible prebuilt binary and must be rebuilt locally.
-
-**Is Orkas free and open source?**
-Yes — the app is MIT licensed and free to use. The packaged app includes 500 credits for the built-in Orkas model; paid plans from $11.99/month add monthly credits, cloud sync, more shared projects and app publishing. With your own keys, model usage is billed by your provider; Orkas does not add a markup. [Pricing →](https://orkas.ai/pricing/?source=gh-orkas)
+**Full side-by-side comparisons →** [vs Claude Code](https://orkas.ai/compare/orkas-vs-claude-code?source=gh-orkas) · [vs Codex](https://orkas.ai/compare/orkas-vs-codex?source=gh-orkas) · [vs Cline](https://orkas.ai/compare/orkas-vs-cline?source=gh-orkas) · [vs LangChain](https://orkas.ai/compare/orkas-vs-langchain?source=gh-orkas) · [vs ChatGPT](https://orkas.ai/compare/orkas-vs-chatgpt?source=gh-orkas) · [vs OpenClaw](https://orkas.ai/compare/orkas-vs-openclaw?source=gh-orkas) · [vs Hermes-Agent](https://orkas.ai/compare/orkas-vs-hermes-agent?source=gh-orkas)
 
 ---
 
@@ -256,12 +218,49 @@ See the [reflection scheduler](./src/main/features/reflection-orchestrator.ts) a
 
 ---
 
-## Acknowledgments
+## FAQ
 
-Some core modules draw on these open-source projects — special thanks to:
+**What is Orkas?**
+Orkas is an open-source (MIT), local-first multi-agent desktop app. Its Commander turns your goal into to-dos and coordinates 16 built-in specialist agents — plus Claude Code, Codex, OpenCode, OpenClaw and Hermes-Agent — to deliver finished files. Not a single chatbot, not a code framework, not a hosted SaaS.
 
-- [OpenClaw](https://github.com/openclaw/openclaw)
-- [Hermes-Agent](https://github.com/NousResearch/hermes-agent)
+**Do I need an API key?**
+No. The packaged app comes with 500 credits for the built-in Orkas model. After that, buy credits, choose a paid plan or add your own provider keys; provider charges are separate.
+
+**Is Orkas a local LLM?**
+No. Orkas runs on your machine and calls the models you choose — the built-in Orkas model, your own API keys, or a local model endpoint. It orchestrates agents and tools; it is not itself a model.
+
+**Can Orkas answer questions from my documents, with citations?**
+Yes. Add PDFs and documents to your local Library; Orkas can search them and answer with citations to source passages, so you can open the original and check. The index is built on your machine.
+
+**Can I use local models like Ollama or LM Studio?**
+Yes. Open **Account settings → Models → Chat → Add model → Custom**, select **OpenAI-compatible** or **Anthropic-compatible**, and enter the base URL, exact model ID, and API key. Choose the saved model from the task's model control.
+
+**Where are my API keys and data stored?**
+On your disk by default. Your own provider keys are encrypted locally and excluded from cloud sync. With your own keys, model calls go straight from your machine to the provider; the built-in Orkas model uses Orkas's managed service. Optional cloud sync and shared projects in the packaged app store the selected data on Orkas servers. [Security and data handling →](https://orkas.ai/security/?source=gh-orkas)
+
+**Does Orkas work offline?**
+The source build can run fully offline against a local model endpoint. The packaged app needs to sign in, and cloud models need a network connection.
+
+**Does it keep working when my computer is off?**
+No — Orkas runs on your computer, so Auto-advance and automations need the computer awake and Orkas running. From v1.9, each automation catches up its most recent missed run within 12 hours when the computer wakes or Orkas starts.
+
+**Can I build and publish apps?**
+Yes. Local apps that run inside Orkas are free. Publishing a web app to a public link needs a paid plan (Lite 5, Pro 8, Max 15 apps), and published web apps don't include every capability available inside Orkas.
+
+**Do I need an Orkas account?**
+The packaged desktop app asks you to sign in when you first launch it. The source build in this repository has no account layer at all — it boots straight into the app.
+
+**Can Orkas drive Claude Code and other CLI agents?**
+Yes. Orkas can drive five external CLI agents as local subprocesses — the coding agents Claude Code, Codex and OpenCode, plus the personal agents OpenClaw and Hermes-Agent — and onboard open-source projects like HyperFrames, all directed from the same chat.
+
+**How is Orkas different from Claude Code / Codex / CrewAI / LangChain?**
+Claude Code and Codex are coding agents — Orkas runs both as members of its team, so you don't have to choose between them; CrewAI and LangChain are code-first frameworks. Orkas is an open-source desktop app where a Commander coordinates a team of specialist agents and your CLI agents, with any model provider, and keeps data and keys local. See the [full comparisons](https://orkas.ai/compare/?source=gh-orkas).
+
+**Which platforms does Orkas support?**
+macOS 12+ (Apple Silicon and Intel) and Windows 10+ have packaged installers. glibc 2.34+ Linux x64/arm64 runs from source today, with no installer yet. Local speech transcription is supported on Linux through the pinned whisper.cpp runtime prepared on first launch. Alpine and other musl-based distributions are not supported. The source bootstrap needs Node 22.12+; Python 3 and a C/C++ build toolchain are needed only when a native npm package has no compatible prebuilt binary and must be rebuilt locally.
+
+**Is Orkas free and open source?**
+Yes — the app is MIT licensed and free to use. The packaged app includes 500 credits for the built-in Orkas model; paid plans from $11.99/month add monthly credits, cloud sync, more shared projects and app publishing. With your own keys, model usage is billed by your provider; Orkas does not add a markup. [Pricing →](https://orkas.ai/pricing/?source=gh-orkas)
 
 ---
 

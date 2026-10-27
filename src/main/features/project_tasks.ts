@@ -27,6 +27,7 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:util';
 import { Mutex } from 'async-mutex';
 
 import * as path from 'node:path';
@@ -547,8 +548,6 @@ export async function updateTask(
     if (patch.status !== undefined) {
       if (!STATUSES.includes(patch.status)) return { ok: false, error: 'bad_status' };
       next.status = patch.status;
-      if (patch.status === 'done') next.done_at = nowIso();
-      else delete next.done_at;
     }
     if (patch.owner_agent !== undefined || patch.owner_agent_id !== undefined) {
       const owner = await _resolveOwner(uid, pid, patch);
@@ -559,6 +558,13 @@ export async function updateTask(
     }
     if (typeof patch.origin_cid === 'string' && patch.origin_cid.trim()) {
       next.origin_cid = patch.origin_cid.trim();
+    }
+    // Validate the whole patch under the task lock before treating it as a
+    // no-op. Reapplying state must not rewrite timestamps or notify listeners.
+    if (isDeepStrictEqual(next, cur)) return { ok: true, task: cur };
+    if (patch.status !== undefined) {
+      if (patch.status === 'done') next.done_at = nowIso();
+      else delete next.done_at;
     }
     next.updated_at = nowIso();
     await _writeTask(uid, pid, next);

@@ -1,6 +1,73 @@
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import sharp from 'sharp';
 import { expect, test } from './fixtures/orkas';
+
+for (const locale of ['zh', 'en']) {
+  test(`attachment markdown images retain local file actions without empty chrome (${locale})`, async ({ modelOrkas: orkas }, info) => {
+    orkas.setLibraryImageDescriptionReplies(['A violet rectangle.', 'A yellow rectangle.']);
+    await orkas.page!.evaluate(lang => (window as any).setLang(lang), locale);
+    const created: any = await orkas.invoke('conversations.create', { title: 'Attachment preview actions' });
+    const cid = created.conversation.conversation_id;
+    const png = await sharp({ create: { width: 640, height: 360, channels: 3, background: '#5b57d6' } }).png().toBuffer();
+    const images = new Map([
+      ['cover art.png', png],
+      ['second.png', await sharp(png).negate().png().toBuffer()],
+    ]);
+    for (const [name, bytes] of images) {
+      // Distinct bytes prevent the attachment store's content deduplication.
+      const uploaded: any = await orkas.invoke('conversations.attachments.upload', { cid, name, data: bytes.toString('base64') });
+      expect(uploaded.ok).toBe(true);
+    }
+    const source = (name: string) => `chat-media://cid/${encodeURIComponent(cid)}/${encodeURIComponent(name)}`;
+    const rows = [...images.keys()].map((name, index) => ({ id: `actions-${index}`, from: 'commander', to: ['user'],
+      ts: new Date(Date.now() - (2 - index) * 1000).toISOString(), text: `![A long attachment image title for preview actions](${source(name)})` }));
+    appendFileSync(path.join(orkas.workspaceRoot, 'account-e2e', 'cloud', 'chats', `${cid}.jsonl`), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
+    await orkas.page!.evaluate(async id => { await (window as any).loadConversations(); await (window as any).setView('conversation', id); }, cid);
+    // Keep the real reveal IPC/validation; control only the OS shell side effect.
+    await orkas.electronApp!.evaluate(({ shell }) => {
+      (process as any).revealedPaths = [];
+      (process as any).originalReveal = shell.showItemInFolder;
+      shell.showItemInFolder = file => { (process as any).revealedPaths.push(file); };
+    });
+    const preview = await orkas.openPreview(() => orkas.page!.locator('#chat-history img.chat-md-img').first().click());
+    const image = preview.locator('.chat-lightbox-img');
+    await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(640);
+    await expect(preview.locator('.chat-lightbox-share')).toHaveCount(0);
+    for (const name of images.keys()) {
+      if (name === 'second.png') await preview.locator('.chat-lightbox-next').click();
+      await expect(image).toHaveAttribute('src', source(name));
+      for (const action of ['add-library', 'reveal']) await expect(preview.locator(`.chat-lightbox-${action}`)).toBeVisible();
+      const resolved: any = await orkas.invoke('attachments.absPath', { cid, name });
+      expect(resolved.ok).toBe(true);
+      await preview.locator('.chat-lightbox-reveal').click();
+      await expect.poll(() => orkas.electronApp!.evaluate(() => (process as any).revealedPaths.at(-1))).toBe(resolved.path);
+      await expect(preview.locator('.ui-dialog-overlay:visible')).toHaveCount(0);
+      await preview.locator('.chat-lightbox-add-library').click();
+      const imported = path.join(orkas.workspaceRoot, 'account-e2e', 'cloud', 'contexts', name);
+      await expect.poll(() => { try { return readFileSync(imported).equals(images.get(name)!); } catch { return false; } }).toBe(true);
+      await expect.poll(async () => {
+        const status: any = await orkas.invoke('kb.status');
+        return status.files.find((file: any) => file.path === name)?.status;
+      }, { timeout: 40_000 }).toBe('ready');
+    }
+    const win = await orkas.electronApp!.browserWindow(preview);
+    for (const [width, height] of [[1040, 760], [480, 320]]) {
+      await win.evaluate((win, size) => win.setContentSize(size[0], size[1]), [width, height]);
+      const box = (await preview.locator('.chat-lightbox-actions').boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      expect(box.y + box.height).toBeLessThanOrEqual(height);
+      await preview.screenshot({ path: info.outputPath(`attachment-actions-${locale}-${width}.png`) });
+    }
+    await orkas.page!.evaluate(src => (window as any).openChatImageLightbox(src, 'Display only'), `data:image/png;base64,${png.toString('base64')}`);
+    await expect(preview).toHaveTitle('Display only');
+    await expect(image).toBeVisible();
+    await expect(preview.locator('.chat-lightbox-actions')).toBeHidden();
+    await preview.screenshot({ path: info.outputPath(`image-without-actions-${locale}.png`) });
+    await orkas.electronApp!.evaluate(({ shell }) => { shell.showItemInFolder = (process as any).originalReveal; });
+  });
+}
 
 test('task previews share one native window while different applications remain open together', async ({ orkas }, info) => {
   const page = orkas.page!;

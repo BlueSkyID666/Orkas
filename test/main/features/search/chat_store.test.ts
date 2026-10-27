@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -35,6 +35,36 @@ function doc(cid: string, msgIndex: number, text: string, role = 'user') {
 }
 
 describe('search/chat_store', () => {
+  it.each([0, 1])('closes a failed SQLite initialization at pragma %s and retries with a fresh handle', async failingPragma => {
+    const store = await loadStore();
+    const failure = new Error('fixture SQLite initialization failure');
+    const original = Database.prototype.pragma;
+    let count = 0;
+    const pragma = vi.spyOn(Database.prototype, 'pragma').mockImplementation(function (...args: any[]) {
+      if (count++ === failingPragma) throw failure;
+      return original.apply(this, args as any);
+    });
+    const close = vi.spyOn(Database.prototype, 'close');
+    try {
+      expect(() => store.docCount(UID)).toThrow(failure);
+      const failedHandle = pragma.mock.contexts[0] as Database.Database;
+      expect(close.mock.contexts).toContain(failedHandle);
+      expect(failedHandle.open).toBe(false);
+      // Failure must not poison the cache or leave a file handle needed for
+      // recovery; the same source-owned index can initialize on the next call.
+      expect(store.docCount(UID)).toBe(0);
+      store.upsertDoc(UID, doc('c1', 0, 'recoveryword'));
+      expect(store.postingsFor(UID, 'recoveryword')).toHaveLength(1);
+    } finally {
+      // Original code leaks this handle. Clean it in the negative fixture so
+      // failure evidence does not itself strand a native handle on Windows.
+      const failedHandle = pragma.mock.contexts[0] as Database.Database;
+      if (failedHandle?.open) failedHandle.close();
+      close.mockRestore();
+      pragma.mockRestore();
+    }
+  });
+
   it('keeps small free space reusable and reclaims substantial space after a rebuild', async () => {
     const store = await loadStore();
     store.upsertDoc(UID, doc('c1', 0, 'still searchable'));

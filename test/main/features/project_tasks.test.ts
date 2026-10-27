@@ -494,6 +494,70 @@ describe('project_tasks › list + progress', () => {
 });
 
 describe('project_tasks › update / complete / delete', () => {
+  it.each(['project', 'global'] as const)('keeps repeated %s updates read-only, then persists a real edit with the same status', async (scope) => {
+    const { pt, pid: projectId } = await setup();
+    const pid = scope === 'project' ? projectId : '';
+    const storage = await import('../../../src/main/storage');
+    const clock = vi.spyOn(storage, 'nowIso').mockReturnValue('2026-10-23T16:21:17');
+    try {
+      const created = await pt.createTask(TEST_UID, pid, { content: 'Paused prerequisite' });
+      if (!created.ok) throw new Error('task fixture failed');
+      const id = created.task.id;
+      const file = pid ? taskFile(pid, id) : globalTaskFile(id);
+      const before = await pt.getTask(TEST_UID, pid, id);
+      const bytes = fs.readFileSync(file, 'utf8');
+      const modified = fs.statSync(file).mtimeMs;
+      const events: unknown[] = [];
+      pt.onTasksChanged(event => events.push(event));
+      clock.mockReturnValue('2026-10-23T16:21:58');
+
+      // Historical pause trace: todo_tasks.update sent the existing status.
+      expect(await pt.updateTask(TEST_UID, pid, id, { status: 'todo' })).toEqual({ ok: true, task: before });
+      expect(await pt.updateTask(TEST_UID, pid, id, { content: '  Paused prerequisite  ' }))
+        .toEqual({ ok: true, task: before });
+      expect(fs.readFileSync(file, 'utf8')).toBe(bytes);
+      expect(fs.statSync(file).mtimeMs).toBe(modified);
+      expect(events).toEqual([]);
+
+      // Equal status must not conceal a changed requirement or bypass checks.
+      expect(await pt.updateTask(TEST_UID, pid, id, { status: 'todo', content: '' }))
+        .toEqual({ ok: false, error: 'content_empty' });
+      expect(await pt.updateTask(TEST_UID, pid, id, { status: 'todo', owner_agent_id: 'unbound' }))
+        .toEqual({ ok: false, error: 'owner_not_bound' });
+      expect(await pt.updateTask(TEST_UID, pid, id, { status: 'todo' }, { expectedStatus: 'progress' }))
+        .toEqual({ ok: false, error: 'status_conflict' });
+      expect(fs.readFileSync(file, 'utf8')).toBe(bytes);
+      expect(events).toEqual([]);
+      expect(await pt.updateTask(TEST_UID, pid, id, { status: 'todo', content: 'Authorized revised requirement' }))
+        .toMatchObject({ ok: true, task: { content: 'Authorized revised requirement', updated_at: '2026-10-23T16:21:58' } });
+      expect(events).toHaveLength(1);
+      vi.resetModules();
+      const reopened = await import('../../../src/main/features/project_tasks');
+      expect(await reopened.getTask(TEST_UID, pid, id)).toMatchObject({ content: 'Authorized revised requirement', status: 'todo' });
+    } finally { clock.mockRestore(); }
+  });
+
+  it.each(['progress', 'review', 'done'] as const)('does not refresh timestamps when reapplying %s', async status => {
+    const { pt, pid } = await setup();
+    const storage = await import('../../../src/main/storage');
+    const clock = vi.spyOn(storage, 'nowIso').mockReturnValue('2026-10-23T16:21:17');
+    try {
+      const created = await pt.createTask(TEST_UID, pid, { content: 'Existing work' });
+      if (!created.ok) throw new Error('task fixture failed');
+      const changed = await pt.updateTask(TEST_UID, pid, created.task.id, { status });
+      if (!changed.ok) throw new Error('status fixture failed');
+      const bytes = fs.readFileSync(taskFile(pid, created.task.id), 'utf8');
+      const events: unknown[] = [];
+      pt.onTasksChanged(event => events.push(event));
+      clock.mockReturnValue('2026-10-23T16:21:58');
+      const repeated = status === 'done' ? await pt.completeTask(TEST_UID, pid, created.task.id)
+        : await pt.updateTask(TEST_UID, pid, created.task.id, { status });
+      expect(repeated).toEqual(changed);
+      expect(fs.readFileSync(taskFile(pid, created.task.id), 'utf8')).toBe(bytes);
+      expect(events).toEqual([]);
+    } finally { clock.mockRestore(); }
+  });
+
   it('rejects a stale status transition without changing the newer result or notifying a false update', async () => {
     const { pt, pid } = await setup();
     const created = await pt.createTask(TEST_UID, pid, { content: 'Already reviewed' });

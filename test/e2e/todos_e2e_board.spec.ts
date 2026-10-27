@@ -1,5 +1,6 @@
 import { openSidebarEntry, expect, test } from './fixtures/orkas';
 import path from 'node:path';
+import { readFileSync, statSync } from 'node:fs';
 
 for (const scope of ['global', 'project'] as const) {
   test(`gives long ${scope} todo content room while keeping editor actions reachable`, async ({ orkas }, info) => {
@@ -1091,3 +1092,46 @@ test('reaches every to-do and keeps reading positions through background refresh
   expect(await board.evaluate(element => element.scrollLeft)).toBeCloseTo(boardLeft, 0);
   await page.screenshot({ path: testInfo.outputPath('todo-column-scroll.png') });
 });
+
+for (const scope of ['global', 'project'] as const) {
+  test(`preserves unchanged ${scope} todos through IPC and editor saves, then persists a real edit`, async ({ orkas }) => {
+    let page = orkas.page!;
+    await page.evaluate(() => (window as any).setLang('en'));
+    const project = scope === 'project' ? await orkas.invoke<any>('projects.create', { name: 'Unchanged task' }) : null;
+    const projectId = project?.project.project_id || '';
+    const { task } = await orkas.invoke<any>('projects.tasks.create', { projectId, content: 'Preserve this requirement' });
+    const taskId = task.id;
+    const uid = JSON.parse(readFileSync(path.join(orkas.workspaceRoot, 'open-users.json'), 'utf8')).open_current_user_id;
+    const file = path.join(orkas.workspaceRoot, uid, 'cloud', ...(projectId ? ['projects', projectId] : []), 'tasks', taskId + '.json');
+    const bytes = readFileSync(file, 'utf8');
+    const before = statSync(file);
+    const repeated = await orkas.invoke<any>('projects.tasks.update', { projectId, taskId, status: 'todo' });
+    expect(repeated).toMatchObject({ ok: true, task });
+    await openSidebarEntry(page, '#todos-btn');
+    if (projectId) await page.locator(`#todos-content .todo-scope-chip[data-pid="${projectId}"]`).click();
+    const edit = async () => {
+      const card = page.locator(`#todos-content .project-todo-item[data-tid="${taskId}"]`);
+      await card.hover();
+      await card.locator('[data-action="todo-menu"]').click();
+      await page.locator('.context-menu-item').filter({ hasText: /^Edit$/ }).click();
+      await expect(page.locator('#project-todo-input')).toHaveValue('Preserve this requirement');
+    };
+    await edit();
+    await page.locator('#project-todo-save').click();
+    await expect(page.locator('#todo-editor-modal')).not.toHaveClass(/open/);
+    expect(readFileSync(file, 'utf8')).toBe(bytes);
+    expect(statSync(file).mtimeMs).toBe(before.mtimeMs);
+    expect(statSync(file).ino).toBe(before.ino);
+    await edit();
+    await page.locator('#project-todo-input').fill('Authorized revised requirement');
+    await page.locator('#project-todo-save').click();
+    await expect(page.locator('#todo-editor-modal')).not.toHaveClass(/open/);
+    await expect(page.locator(`#todos-content .project-todo-item[data-tid="${taskId}"]`)).toContainText('Authorized revised requirement');
+    page = await orkas.relaunch();
+    const { tasks } = await orkas.invoke<any>('projects.tasks.list', { projectId });
+    expect(tasks.find((item: any) => item.id === taskId)).toMatchObject({ content: 'Authorized revised requirement', status: 'todo' });
+    await openSidebarEntry(page, '#todos-btn');
+    if (projectId) await page.locator(`#todos-content .todo-scope-chip[data-pid="${projectId}"]`).click();
+    await expect(page.locator(`#todos-content .project-todo-item[data-tid="${taskId}"]`)).toContainText('Authorized revised requirement');
+  });
+}
