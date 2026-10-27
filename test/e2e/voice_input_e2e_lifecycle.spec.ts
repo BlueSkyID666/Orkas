@@ -67,6 +67,7 @@ test.describe('voice input', () => {
     // A Windows renderer under full-suite load can take slightly over the
     // global 10s expect window to complete the local WebSocket handshake.
     await expect(mic).toHaveAttribute('data-voice-phase', 'recording', { timeout: 20_000 });
+    await page.screenshot({ path: info.outputPath('voice-recording-en.png') });
     await mic.click();
 
     await expectComposerText(input, 'Draft: E2E dictated launch note');
@@ -88,8 +89,15 @@ test.describe('voice input', () => {
     const mic = page.locator('#new-chat-mic-btn');
     await input.fill('Keep this draft');
     await mic.click();
+    await expect(mic).toHaveAttribute('data-voice-phase', 'connecting');
     await expect(mic).toHaveClass(/\bis-busy\b/);
     await expect(mic).not.toHaveClass(/\bis-recording\b/);
+    await expect(mic).toHaveAttribute('aria-label', 'Connecting…');
+    await page.screenshot({ path: info.outputPath('voice-connecting-en.png') });
+    await page.setViewportSize({ width: 760, height: 600 });
+    await page.evaluate(async () => { await (window as any).setLang('zh'); });
+    await expect(mic).toHaveAttribute('aria-label', '正在连接…');
+    await page.screenshot({ path: info.outputPath('voice-connecting-zh-narrow.png') });
     await expect.poll(() => page.evaluate(() => (window as any).__e2eVoiceSocketUrls.length)).toBe(1);
     await mic.click();
 
