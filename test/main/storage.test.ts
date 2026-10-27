@@ -9,7 +9,7 @@ import {
   readJson, readJsonSync, writeJson, writeJsonSync, linkWithRetry,
   writeTextAtomicSync, writeTextAtomicGuardedSync, appendJsonl, appendJsonlAtomic,
   invalidateLineCount, readJsonl, readJsonlPage, readJsonlPageWithOffsets,
-  readJsonlWindow, readJsonlWindowAtMatch, __storageTestHooks,
+  readJsonlWindow, readJsonlWindowAtMatch, readJsonlAppendRecord, __storageTestHooks,
 } from '../../src/main/storage';
 
 let tmpDir: string;
@@ -608,5 +608,52 @@ describe('storage › appendJsonlAtomic', () => {
     invalidateLineCount(p);
     const r = await appendJsonlAtomic(p, { i: 1 });
     expect(r.msgIndex).toBe(0);
+  });
+});
+
+describe('storage › immutable append receipt reads', () => {
+  it('reads the exact Unicode/formula record after later appends without substituting the next row', async () => {
+    const file = path.join(tmpDir, 'receipt-read.jsonl');
+    const first = { id: 'first', text: '完整记录 $x^2$\n🌊'.repeat(256) };
+    const second = { id: 'second', text: 'unrelated later task' };
+    const one = await appendJsonlAtomic(file, first, true);
+    const two = await appendJsonlAtomic(file, second, true);
+    expect(await readJsonlAppendRecord(one.source!)).toEqual(first);
+    expect(await readJsonlAppendRecord(two.source!)).toEqual(second);
+  });
+
+  it.each(['replace', 'truncate', 'delete', 'same-inode edit'])(
+    'rejects a receipt after %s instead of reading another task', async failure => {
+      const file = path.join(tmpDir, 'receipt-stale.jsonl');
+      const original = { id: 'message', text: 'original' };
+      const replacement = { id: 'message', text: 'changed!' };
+      const { source } = await appendJsonlAtomic(file, original, true);
+      if (failure === 'replace') {
+        fs.writeFileSync(`${file}.new`, JSON.stringify(replacement) + '\n');
+        fs.renameSync(`${file}.new`, file);
+      } else if (failure === 'truncate') {
+        fs.truncateSync(file, 0);
+      } else if (failure === 'delete') {
+        fs.unlinkSync(file);
+      } else {
+        const inode = fs.statSync(file).ino;
+        fs.writeFileSync(file, JSON.stringify(replacement) + '\n');
+        fs.utimesSync(file, new Date(), new Date(source!.mtime + 5000));
+        expect(fs.statSync(file).ino).toBe(inode);
+        expect(fs.statSync(file).size).toBe(source!.size);
+      }
+      await expect(readJsonlAppendRecord(source!)).rejects.toThrow();
+    },
+  );
+
+  it.each([
+    { label: 'negative offset', override: { offset: -1 } },
+    { label: 'unsafe offset', override: { offset: Number.MAX_SAFE_INTEGER + 1 } },
+    { label: 'empty range', override: { bytes: 0 } },
+    { label: 'mismatched end', override: { size: 1 } },
+  ])('rejects a corrupt $label without returning stored content', async ({ override }) => {
+    const file = path.join(tmpDir, 'receipt-corrupt.jsonl');
+    const { source } = await appendJsonlAtomic(file, { text: 'private fixture body' }, true);
+    await expect(readJsonlAppendRecord({ ...source!, ...override })).rejects.toThrow();
   });
 });
