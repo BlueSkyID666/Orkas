@@ -1226,6 +1226,68 @@ describe('auth › hasConfiguredModel', () => {
 });
 
 describe('auth › listModels', () => {
+  it('saves and reopens MiniMax Flash without migrating a hidden M2.7 entry', async () => {
+    const auth = await import('../../../src/main/features/auth');
+    const key = await auth.addApiKey('minimax-cn', 'fixture-minimax-key');
+    const old = await auth.addEntry({ provider: 'minimax-cn', model: 'MiniMax-M2.7', profileId: key.profileId });
+    for (const provider of ['minimax-cn', 'minimax-portal', 'minimax-portal-cn']) {
+      expect((await auth.listModels(provider)).models.map(m => m.id)).toEqual(['MiniMax-M3.1-Flash', 'MiniMax-M3']);
+    }
+    const added = await auth.addEntry({ provider: 'minimax-cn', model: 'MiniMax-M3.1-Flash', profileId: key.profileId });
+    expect(added.entryId).toEqual(expect.any(String));
+    vi.resetModules();
+    (await import('../../../src/main/features/users')).activateUser(TEST_UID);
+    const reopened = await (await import('../../../src/main/features/auth')).listEntries();
+    expect(reopened.entries.find(e => e.entryId === old.entryId)).toMatchObject({ model: 'MiniMax-M2.7', modelAvailable: true });
+    expect(reopened.entries.find(e => e.entryId === added.entryId)).toMatchObject({ model: 'MiniMax-M3.1-Flash', modelAvailable: true });
+    const selected = await (await import('../../../src/main/features/auth')).selectEntry(old.entryId);
+    expect(selected.entries[0]).toMatchObject({ entryId: old.entryId, model: 'MiniMax-M2.7', modelAvailable: true });
+  });
+
+  it('honors picker-only retirement in Server catalog metadata without retiring saved entries', async () => {
+    const { clientConfig } = await import('../../../src/main/features/client_config');
+    clientConfig.applyServerPayload({ immediate: { model_catalog: { providers: { 'kimi-coding': [
+      { id: 'k3', name: 'Kimi K3' },
+      { id: 'k2p7', name: 'Kimi K2.7 Code', hiddenFromPicker: true },
+    ] } } }, restart: {}, config_hash: 'sha256:picker-only-retirement' }, '"picker-only-retirement"');
+    const auth = await import('../../../src/main/features/auth');
+    expect((await auth.listModels('kimi-coding')).models.map(m => m.id)).toEqual(['k3']);
+    const key = await auth.addApiKey('kimi-coding', 'fixture-coding-key');
+    const saved = await auth.addEntry({ provider: 'kimi-coding', model: 'k2p7', profileId: key.profileId });
+    expect((await auth.listEntries()).entries.find(e => e.entryId === saved.entryId)).toMatchObject({ model: 'k2p7', modelAvailable: true });
+    expect((await auth.selectEntry(saved.entryId)).entries[0]).toMatchObject({ entryId: saved.entryId, model: 'k2p7', modelAvailable: true });
+  });
+
+  it('offers recent native Kimi Coding models without rewriting a hidden legacy selection', async () => {
+    // Official Coding IDs and the bundled SDK agree on K3/K3-256K/K2.8.
+    // The requester chose picker-only retirement for k2p7, not migration.
+    const auth = await import('../../../src/main/features/auth');
+    const key = await auth.addApiKey('kimi-coding', 'fixture-coding-key');
+    const saved = await auth.addEntry({ provider: 'kimi-coding', model: 'k2p7', profileId: key.profileId });
+    const paths = await import('../../../src/main/paths');
+    const secrets = await import('../../../src/main/util/local-secret-store');
+    const file = paths.userAuthProfilesFile(TEST_UID);
+    const ctx = { namespace: 'auth.profiles', ownerId: TEST_UID, recordId: 'auth-profiles.json' };
+    const before = JSON.parse(secrets.decryptLocalSecret(ctx, fs.readFileSync(file, 'utf8')));
+    expect((await auth.listModels('kimi-coding')).models.map(m => ({ id: m.id, name: m.name }))).toEqual([
+      { id: 'k3', name: 'Kimi K3' },
+      { id: 'k3-256k', name: 'Kimi K3 (256K)' },
+      { id: 'kimi-for-coding', name: 'Kimi K2.8 Preview' },
+    ]);
+    expect((await auth.listEntries()).entries.find(e => e.entryId === saved.entryId)).toMatchObject({ model: 'k2p7', modelAvailable: true });
+    const after = JSON.parse(secrets.decryptLocalSecret(ctx, fs.readFileSync(file, 'utf8')));
+    expect(after.entries).toEqual(before.entries);
+    expect(after.profiles).toEqual(before.profiles);
+    const added = await auth.addEntry({ provider: 'kimi-coding', model: 'kimi-for-coding', profileId: key.profileId });
+    vi.resetModules();
+    (await import('../../../src/main/features/users')).activateUser(TEST_UID);
+    const reopened = await (await import('../../../src/main/features/auth')).listEntries();
+    expect(reopened.entries.find(e => e.entryId === saved.entryId)).toMatchObject({ model: 'k2p7', modelAvailable: true });
+    expect(reopened.entries.find(e => e.entryId === added.entryId)).toMatchObject({ model: 'kimi-for-coding', modelName: 'Kimi K2.8 Preview', modelAvailable: true });
+    const selected = await (await import('../../../src/main/features/auth')).selectEntry(saved.entryId);
+    expect(selected.entries[0]).toMatchObject({ entryId: saved.entryId, model: 'k2p7', modelAvailable: true });
+  });
+
 
   it('returns the hand-curated list for a known provider', async () => {
     const a = await import('../../../src/main/features/auth');

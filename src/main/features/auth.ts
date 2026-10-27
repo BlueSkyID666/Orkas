@@ -1357,7 +1357,7 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
   const allowed = (models: { id: string; name: string }[]) =>
     models.filter((m) => isModelProviderAllowed(id, m.id));
   const curated = curatedModelsFor(id);
-  const policyAllowed = allowed(curated);
+  const policyAllowed = allowed(curated.filter(model => model.hiddenFromPicker !== true));
   if (EXTERNAL_API_PROVIDERS.includes(id) || policyAllowed.length === 0) {
     return { models: policyAllowed };
   }
