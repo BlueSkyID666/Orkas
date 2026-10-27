@@ -1,6 +1,6 @@
 // Voice-to-text for the chat composers.
 //
-// Adds a microphone button next to the "+" attach button in the new-chat
+// Adds a microphone button immediately before Send in the new-chat
 // landing composer and the conversation composer. Clicking it captures the
 // mic (getUserMedia + an AudioWorklet that downsamples to 16 kHz / 16-bit
 // PCM), streams the PCM (gzip-compressed when the browser supports it) over
@@ -24,7 +24,12 @@
   })();
 
   function _errorInfo(e) {
-    return { code: _voiceErrorCode(e && (e.name || e.message)) };
+    const publicCode = typeof e?.code === 'string' && [
+      'api_key_required', 'invalid_api_key', 'insufficient_scope', 'unauthorized',
+      'insufficient_quota', 'restricted', 'network', 'rate_limit_exceeded',
+      'empty_transcript', 'incomplete_transcript', 'timeout',
+    ].includes(e.code) ? e.code : null;
+    return { code: publicCode || _voiceErrorCode(e && (e.name || e.message)) };
   }
 
   async function gzipBytes(u8) {
@@ -66,6 +71,8 @@
       this._inputEnded = false;
       this._captureEpoch = 0;
       this._captureFlush = null;
+      this._finishTimer = null;
+      this._connectTimer = null;
     }
 
     _emit(name, ...args) {
@@ -117,6 +124,11 @@
         return;
       }
       this._ws = ws;
+      this._connectTimer = setTimeout(() => {
+        if (this._ws !== ws) return;
+        this._emit('onError', Object.assign(new Error(), { code: 'network' }));
+        if (this._ws === ws) this.close();
+      }, 60_000);
       this._lastText = '';
       const incoming = { tail: Promise.resolve(), pending: 0 };
       this._sendTail = Promise.resolve();
@@ -137,6 +149,7 @@
           return;
         }
         try { if (voiceLog) voiceLog.info('ASR websocket open'); } catch {}
+        clearTimeout(this._connectTimer);
         this._running = true;
         this._emit('onOpen');
         this._startCapture();
@@ -190,8 +203,10 @@
     _handleJSON(s) {
       let obj;
       try { obj = JSON.parse(String(s || '{}')); } catch { return; }
+      // Some public peers send a ready control message; it is not a transcript.
+      if (obj && obj.event === 'ready') return;
       if (obj && obj.event === 'timeout') {
-        const err = new Error('asr_timeout');
+        const err = Object.assign(new Error('asr_timeout'), { code: 'timeout' });
         err.maxSeconds = Number(obj.max_seconds || obj.maxSeconds || 0) || undefined;
         this._emit('onError', err);
         this._running = false;
@@ -199,7 +214,7 @@
         return;
       }
       if (obj && obj.event === 'error') {
-        const err = new Error('asr_' + (obj.reason || 'error'));
+        const err = Object.assign(new Error('asr_' + (obj.reason || 'error')), { code: String(obj.reason || 'unavailable') });
         try { if (voiceLog) voiceLog.error('ASR server event error', { code: _voiceErrorCode(obj.reason) }); } catch {}
         this._emit('onError', err);
         this._running = false;
@@ -259,10 +274,19 @@
         try {
           const payload = this._useGzip ? await gzipBytes(u8) : u8;
           if (this._ws !== ws || ws.readyState !== WebSocket.OPEN) return;
-          ws.send(payload);
-          if (last) {
-            ws.send('__END__');
-            this._running = false;
+          if (ws.bufferedAmount > 256 * 1024) {
+            this._emit('onError', Object.assign(new Error(), { code: 'network' }));
+            if (this._ws === ws) this.close();
+            return;
+          }
+          try {
+            ws.send(payload);
+            if (last) {
+              ws.send('__END__');
+              this._running = false;
+            }
+          } catch {
+            throw Object.assign(new Error(), { code: 'network' });
           }
         } catch (e) {
           if (this._ws !== ws || ws.readyState !== WebSocket.OPEN) return;
@@ -356,6 +380,7 @@ registerProcessor('orkas-asr-capture', C);`;
               if (data.flushed && this._captureFlush?.node === worklet) {
                 const pending = this._captureFlush;
                 this._captureFlush = null;
+                clearTimeout(pending.timer);
                 pending.resolve(true);
               }
             };
@@ -411,7 +436,7 @@ registerProcessor('orkas-asr-capture', C);`;
     _teardownCapture() {
       const pending = this._captureFlush;
       this._captureFlush = null;
-      if (pending) pending.resolve(false);
+      if (pending) { clearTimeout(pending.timer); pending.resolve(false); }
       try { if (this._workletNode) this._workletNode.port.onmessage = null; } catch {}
       try { if (this._scriptNode) this._scriptNode.onaudioprocess = null; } catch {}
       try { if (this._workletNode) this._workletNode.disconnect(); } catch {}
@@ -430,6 +455,8 @@ registerProcessor('orkas-asr-capture', C);`;
     }
 
     _emitCloseOnce() {
+      clearTimeout(this._connectTimer);
+      clearTimeout(this._finishTimer);
       if (this._closeEmitted) return;
       this._closeEmitted = true;
       this._running = false;
@@ -468,9 +495,17 @@ registerProcessor('orkas-asr-capture', C);`;
       let flushed = Promise.resolve(true);
       const node = this._workletNode;
       if (node && node.port) {
-        flushed = new Promise((resolve) => { this._captureFlush = { node, resolve }; });
+        flushed = new Promise((resolve) => {
+          const timer = setTimeout(() => {
+            if (this._captureFlush?.node !== node) return;
+            this._captureFlush = null;
+            resolve(false);
+          }, 500);
+          this._captureFlush = { node, resolve, timer };
+        });
         try { node.port.postMessage({ flush: true }); }
         catch {
+          clearTimeout(this._captureFlush.timer);
           this._captureFlush.resolve(false);
           this._captureFlush = null;
         }
@@ -479,7 +514,7 @@ registerProcessor('orkas-asr-capture', C);`;
         const complete = await flushed;
         if (this._ws !== ws || !this._pendingClose || ws.readyState === WebSocket.CLOSED) return;
         if (!complete) {
-          this._emit('onError', new Error('incomplete_capture'));
+          this._emit('onError', Object.assign(new Error('incomplete_capture'), { code: 'incomplete_transcript' }));
           if (this._ws === ws) this.close();
           return;
         }
@@ -487,17 +522,19 @@ registerProcessor('orkas-asr-capture', C);`;
         await this._sendAudio(new Uint8Array(0), true);
       };
       finish();
-      // The 1.5s ceiling includes flushing, compression and final transcript.
+      // Keep the remote 10s final-response budget; the worklet tail has its own 500ms bound.
       try {
-        setTimeout(() => {
+        this._finishTimer = setTimeout(() => {
           if (!this._pendingClose || this._ws !== ws) return;
           if (this._captureFlush) this._emit('onError', new Error('incomplete_capture'));
           if (this._ws === ws) this.close();
-        }, 1500);
+        }, 10_000);
       } catch {}
     }
 
     close() {
+      clearTimeout(this._connectTimer);
+      clearTimeout(this._finishTimer);
       this._captureEpoch++;
       this._inputEnded = true;
       this._running = false;
@@ -559,10 +596,56 @@ registerProcessor('orkas-asr-capture', C);`;
     return 'unknown';
   }
 
+  let cancelActive = null;
+  const tr = (key) => _t('chat.mic_' + key, 'chat.mic_' + key);
+  const invoke = (name) => {
+    const facade = window.orkas?.voiceInput;
+    if (typeof facade?.[name] === 'function') return facade[name]();
+    return window.orkas.invoke('voice.' + name);
+  };
+
+  async function openKeySettings(create) {
+    if (typeof loadRendererFeature === 'function') await loadRendererFeature('settings');
+    setView('settings');
+    if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab('credentials');
+    const input = document.getElementById('settings-orkas-api-key-input');
+    input?.scrollIntoView?.({ block: 'center' });
+    input?.focus();
+    if (create) document.getElementById('settings-orkas-api-create-key')?.click();
+  }
+
+  async function publicGuidance(code) {
+    if (['api_key_required', 'invalid_api_key', 'insufficient_scope', 'unauthorized'].includes(code)) {
+      const message = code === 'api_key_required' ? 'key_required' : code === 'insufficient_scope' ? 'scope_required' : 'invalid_key';
+      const choice = await uiChoice({ title: tr('title'), message: tr(message),
+        choices: [{ id: 'configure', label: t('settings.orkas_api.configure') }],
+        leadingChoices: [{ id: 'create', label: t('settings.orkas_api.create_key'), style: '' }] });
+      if (choice) await openKeySettings(choice === 'create');
+      return;
+    }
+    if (code === 'insufficient_quota') {
+      const choice = await uiChoice({ title: tr('title'), message: tr('insufficient_credits'),
+        choices: [{ id: 'credits', label: tr('manage_credits') }] });
+      if (choice === 'credits') {
+        const url = new URL('https://orkas.ai/views/account/account.html');
+        url.searchParams.set('lang', typeof getLang === 'function' ? getLang() : 'en');
+        const result = await window.orkas.invoke('auth.openExternal', { url: url.toString() });
+        if (!result?.ok) await uiAlert(tr('error_unavailable'));
+      }
+      return;
+    }
+    const errors = { NotAllowedError: 'error_permission', SecurityError: 'error_permission',
+      NotFoundError: 'error_no_device', DevicesNotFoundError: 'error_no_device',
+      NotReadableError: 'error_busy', TrackStartError: 'error_busy', restricted: 'error_restricted',
+      network: 'error_unavailable', rate_limit_exceeded: 'rate_limited', empty_transcript: 'empty',
+      incomplete_transcript: 'incomplete', timeout: 'limit_reached' };
+    await uiAlert(tr(errors[code] || 'error_unavailable').replace('{seconds}', '120'));
+  }
+
   function attach(buttonEl, textareaEl) {
     if (!buttonEl || !textareaEl || buttonEl.dataset.voiceBound === '1') return;
     buttonEl.dataset.voiceBound = '1';
-    if (!(window.orkas && window.orkas.voiceInput && typeof window.orkas.voiceInput.createSession === 'function')) {
+    if (!(window.orkas && (typeof window.orkas.voiceInput?.createSession === 'function' || typeof window.orkas.invoke === 'function'))) {
       // No Server-backed voice support in this build — hide the affordance.
       buttonEl.style.display = 'none';
       return;
@@ -592,12 +675,13 @@ registerProcessor('orkas-asr-capture', C);`;
       buttonEl.dataset.voicePhase = p;
       buttonEl.classList.toggle('is-recording', p === 'recording' || p === 'connecting');
       buttonEl.classList.toggle('is-busy', p === 'finalizing');
-      const titleKey = (p === 'recording' || p === 'connecting' || p === 'finalizing')
+      const titleKey = p === 'finalizing' ? 'chat.mic_finalizing' : (p === 'recording' || p === 'connecting')
         ? 'chat.mic_stop_title' : 'chat.mic_title';
-      const titleFallback = (p === 'recording' || p === 'connecting' || p === 'finalizing')
+      const titleFallback = p === 'finalizing' ? 'Finishing recognition…' : (p === 'recording' || p === 'connecting')
         ? 'Stop recording' : 'Voice input';
       buttonEl.title = _t(titleKey, titleFallback);
       buttonEl.setAttribute('aria-label', buttonEl.title);
+      buttonEl.setAttribute('aria-pressed', String(p === 'recording'));
     }
 
     function setAttemptPhase(attempt, nextPhase) {
@@ -622,20 +706,38 @@ registerProcessor('orkas-asr-capture', C);`;
       attempt.insertion?.dispose();
       if (activeAttempt !== attempt) return;
       activeAttempt = null;
+      if (cancelActive === cancel) cancelActive = null;
       setPhase('idle');
     }
 
-    textareaEl.addEventListener('composer-owner-change', () => {
+    function cancel() {
       const attempt = activeAttempt;
       if (!attempt) return;
       attempt.cancelled = true;
       attempt.finished = true;
       reset(attempt);
       try { attempt.client?.close(); } catch {}
-    });
+    }
+    textareaEl.addEventListener('composer-owner-change', cancel);
+    window.addEventListener('beforeunload', cancel);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) cancel(); });
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') cancel(); });
+    window.addEventListener('i18n-change', () => setPhase(phase));
+    async function refreshHint() {
+      if (phase !== 'idle') return;
+      try {
+        const status = await invoke('status');
+        if (phase !== 'idle' || !status?.ok) return;
+        buttonEl.title = tr(status.configured ? 'title' : 'key_required');
+        buttonEl.setAttribute('aria-label', buttonEl.title);
+      } catch { /* The click path reports a recoverable status failure. */ }
+    }
+    buttonEl.addEventListener('mouseenter', refreshHint);
+    buttonEl.addEventListener('focus', refreshHint);
 
     async function startRecording() {
       if (activeAttempt) return;
+      if (cancelActive) cancelActive();
       const attempt = {
         recordingStarted: false,
         finished: false,
@@ -647,14 +749,41 @@ registerProcessor('orkas-asr-capture', C);`;
         client: null,
       };
       activeAttempt = attempt;
+      cancelActive = cancel;
       setAttemptPhase(attempt, 'connecting');
+      try {
+        const status = await invoke('status');
+        if (activeAttempt !== attempt || attempt.cancelled) return;
+        if (!status?.ok) { reset(attempt); await publicGuidance('unavailable'); return; }
+        if (!status.configured) { reset(attempt); await publicGuidance('api_key_required'); return; }
+      } catch { if (activeAttempt === attempt) { reset(attempt); await publicGuidance('unavailable'); } return; }
+      if (typeof window.orkas.voiceInput?.ensureMicrophoneAccess === 'function' || typeof window.orkas.invoke === 'function') {
+        try {
+          const access = await invoke('ensureMicrophoneAccess');
+          if (activeAttempt !== attempt || attempt.cancelled) return;
+          if (!access || access.ok === false || !access.granted) {
+            attempt.finished = true;
+            reset(attempt);
+            if (access?.status === 'restricted') await publicGuidance('restricted');
+            else _alert(_t('chat.mic_error_permission', 'Microphone access was blocked. Allow it in your system settings to use voice input.'));
+            return;
+          }
+        } catch (e) {
+          if (activeAttempt !== attempt || attempt.cancelled) return;
+          try { if (voiceLog) voiceLog.error('microphone access preflight failed', _errorInfo(e)); } catch {}
+          attempt.finished = true;
+          _alert(_t('chat.mic_error_unavailable', 'Voice input is unavailable right now.'));
+          reset(attempt);
+          return;
+        }
+      }
       let url = '';
       try {
-        const r = await window.orkas.voiceInput.createSession();
+        const r = await invoke('createSession');
         if (activeAttempt !== attempt || attempt.cancelled) return;
-        if (r && r.error === 'E_ORKAS_API_KEY_REQUIRED') {
+        if (r && (r.error === 'E_ORKAS_API_KEY_REQUIRED' || ['api_key_required', 'invalid_api_key', 'insufficient_scope', 'rate_limit_exceeded'].includes(r.code))) {
           attempt.finished = true;
-          _alert(_t('settings.orkas_api.key_required', 'Enter an API Key first.'));
+          await publicGuidance(r.code || 'api_key_required');
           reset(attempt);
           return;
         }
@@ -668,25 +797,6 @@ registerProcessor('orkas-asr-capture', C);`;
         reset(attempt);
         return;
       }
-      if (typeof window.orkas.voiceInput.ensureMicrophoneAccess === 'function') {
-        try {
-          const access = await window.orkas.voiceInput.ensureMicrophoneAccess();
-          if (activeAttempt !== attempt || attempt.cancelled) return;
-          if (!access || access.ok === false || !access.granted) {
-            attempt.finished = true;
-            _alert(_t('chat.mic_error_permission', 'Microphone access was blocked. Allow it in your system settings to use voice input.'));
-            reset(attempt);
-            return;
-          }
-        } catch (e) {
-          if (activeAttempt !== attempt || attempt.cancelled) return;
-          try { if (voiceLog) voiceLog.error('microphone access preflight failed', _errorInfo(e)); } catch {}
-          attempt.finished = true;
-          _alert(_t('chat.mic_error_unavailable', 'Voice input is unavailable right now.'));
-          reset(attempt);
-          return;
-        }
-      }
       if (activeAttempt !== attempt || attempt.cancelled) return;
       if (!attempt.insertion?.valid()) { reset(attempt); return; }
       const attemptClient = new AsrClient(url, {
@@ -696,9 +806,13 @@ registerProcessor('orkas-asr-capture', C);`;
           setAttemptPhase(attempt, 'recording');
           startLimitTimer(attempt);
         },
-        onResult: ({ text }) => {
+        onResult: ({ text, last }) => {
           if (activeAttempt !== attempt) return;
           if (text) applyTranscript(attempt, text);
+          if (last && activeAttempt === attempt) {
+            attempt.finished = true; reset(attempt); attemptClient.close();
+            if (!String(text || '').trim()) publicGuidance('empty_transcript');
+          }
         },
         onError: (err) => {
           if (activeAttempt !== attempt || attempt.finished) {
@@ -706,6 +820,10 @@ registerProcessor('orkas-asr-capture', C);`;
             return;
           }
           try { if (voiceLog) voiceLog.error('voice client error', { phase: attempt.phase, error: _errorInfo(err) }); } catch {}
+          if (err?.code || ['NotReadableError', 'TrackStartError'].includes(err?.name)) {
+            attempt.finished = true; attemptClient.close(); reset(attempt);
+            publicGuidance(err.code || err.name); return;
+          }
           const name = err && typeof err === 'object'
             ? [err.name, err.message].map((value) => String(value || '').trim()).filter(Boolean).join(' ')
             : String(err || '');
@@ -738,7 +856,7 @@ registerProcessor('orkas-asr-capture', C);`;
             return;
           }
           reset(attempt);
-
+          if (!attempt.cancelled) publicGuidance('incomplete_transcript');
         },
       });
       attempt.client = attemptClient;
@@ -785,11 +903,12 @@ registerProcessor('orkas-asr-capture', C);`;
   }
 
   // Expose the transport factory for deterministic capture and cancellation tests.
-  window.VoiceInput = { attach, createClient: (url, callbacks) => new AsrClient(url, callbacks) };
+  window.VoiceInput = { attach, cancel: () => cancelActive?.(), createClient: (url, callbacks) => new AsrClient(url, callbacks) };
 
   document.addEventListener('DOMContentLoaded', () => {
     attach(document.getElementById('new-chat-mic-btn'), document.getElementById('new-chat-input'));
     attach(document.getElementById('chat-mic-btn'), document.getElementById('chat-input'));
     attach(document.getElementById('project-chat-mic-btn'), document.getElementById('project-chat-input'));
+    attach(document.getElementById('auto-mic-btn'), document.getElementById('auto-task-input'));
   });
 })();

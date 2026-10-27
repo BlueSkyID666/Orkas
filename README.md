@@ -80,6 +80,8 @@ One task is a good start. Orkas is built for the work that keeps going.
 > [!NOTE]
 > Shared projects, cloud sync and web-app publishing are only in the packaged app — the open-source build doesn't support them yet. To use them, **[download Orkas for macOS & Windows](https://orkas.ai/download/?source=gh-orkas&entry_point=github_readme&download=1)** (free, with 500 credits to start).
 
+Voice input also works in the source build. Configure an **Orkas API Key** in **Settings → Models**, then click the microphone beside a composer. Allow microphone access when prompted. Audio is sent to Orkas for recognition and uses the key owner’s Orkas credits. Click again to stop, review the text, and send it yourself. If access was denied, enable the microphone in your system settings.
+
 ---
 
 ## Run Claude Code, Codex, OpenCode, OpenClaw and Hermes-Agent together

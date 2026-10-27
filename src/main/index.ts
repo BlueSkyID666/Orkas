@@ -1480,9 +1480,23 @@ if (!gotLock) {
     registerKbFileProtocol();
     registerChatMediaProtocol();
     registerChatAppProtocol();
-    // Renderer permission gate. Voice input is stripped from the open-source build, so media
-    // capture is denied; clipboard permissions are kept for copy/paste flows.
-    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    // Only the trusted main frame can capture audio. Previews and embedded apps
+    // retain their independent, default-deny permission handlers.
+    session.defaultSession.setPermissionCheckHandler((wc, permission, _origin, details) => {
+      if (permission === 'media') {
+        const owner = wc ? BrowserWindow.fromWebContents(wc) : null;
+        return !!owner && mainWindows.has(owner) && details.isMainFrame === true && details.mediaType === 'audio';
+      }
+      return permission === 'clipboard-read' || permission === 'clipboard-sanitized-write';
+    });
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+      const owner = wc ? BrowserWindow.fromWebContents(wc) : null;
+      if (!owner || !mainWindows.has(owner) || !details.isMainFrame) { callback(false); return; }
+      if (permission === 'media') {
+        const mediaTypes = (details as Electron.MediaAccessPermissionRequest).mediaTypes || [];
+        callback(mediaTypes.length > 0 && mediaTypes.every((type) => type === 'audio'));
+        return;
+      }
       callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write');
     });
     registerIpc(flushForShutdown);

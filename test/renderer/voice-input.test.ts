@@ -1,5 +1,5 @@
 import { composerAccessorSource } from './composer-test-source';
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
@@ -14,12 +14,14 @@ function makeButton(id: string) {
     style: {} as Record<string, string>,
     title: '',
     classList: {
+      contains(name: string) { return classes.has(name); },
       toggle(name: string, active: boolean) {
         if (active) classes.add(name);
         else classes.delete(name);
       },
     },
-    setAttribute() {},
+    parentNode: { insertBefore: vi.fn() },
+    setAttribute: vi.fn(),
     addEventListener(name: string, handler: Function) { listeners[name] = handler; },
     click() { return listeners.click?.(); },
   };
@@ -33,6 +35,7 @@ function makeTextarea() {
     setSelectionRange() {},
     dispatchEvent() {},
     addEventListener() {},
+    getClientRects: () => [1],
     focus() {},
   };
 }
@@ -42,14 +45,22 @@ function loadVoiceInput(voice: any, _unused?: undefined, options: {
   globals?: Record<string, unknown>;
 } = {}) {
   const alerts: string[] = [];
+  const windowEvents: Record<string, Function> = {};
+  const documentEvents: Record<string, Function> = {};
+  const english = JSON.parse(fs.readFileSync(path.join(__dirname, '../../src/renderer/locales/en.json'), 'utf8'));
   const windowObject: any = {
     orkas: { voiceInput: voice },
+    addEventListener: (name: string, fn: Function) => { windowEvents[name] = fn; },
     alert(message: string) { alerts.push(String(message)); },
   };
   const context: any = {
     console,
     window: windowObject,
-    document: { addEventListener() {}, getElementById: () => null },
+    document: { addEventListener: (name: string, fn: Function) => { documentEvents[name] = fn; }, getElementById: () => null, hidden: false },
+    t: (key: string) => english[key] || key,
+    uiAlert: (message: string) => { alerts.push(String(message)); },
+    uiChoice: vi.fn(async () => null), uiConfirm: vi.fn(), uiToast: vi.fn(),
+    setInterval, clearInterval,
     navigator: {},
     composerInsertion: () => ({ valid: () => true, replace: () => true, dispose() {} }),
     setTimeout,
@@ -65,7 +76,7 @@ function loadVoiceInput(voice: any, _unused?: undefined, options: {
   vm.runInContext(composerAccessorSource, context);
   const source = fs.readFileSync(options.sourcePath || path.join(__dirname, '../../src/renderer/modules/voice-input.js'), 'utf8');
   vm.runInContext(source, context);
-  return { context, alerts };
+  return { context, alerts, windowEvents, documentEvents };
 }
 
 function installAudioCaptureStub(context: any) {
@@ -474,7 +485,7 @@ describe.each([
     await new Promise<void>((resolve) => setImmediate(resolve));
     fixture.processSamples(128);
     fixture.client.stop();
-    const deadline = [...fixture.timers.values()].find((timer) => timer.delay === 1500);
+    const deadline = [...fixture.timers.values()].find((timer) => timer.delay === 500);
     expect(deadline).toBeDefined();
     deadline!.callback();
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -650,13 +661,14 @@ describe('voice capture interruption', () => {
 
 // Controller tests keep ticket, microphone and socket boundaries deterministic;
 // the capture/wire cases above own audio framing. No account or telemetry facade.
-function controllerHarness(voiceOverrides: Record<string, unknown> = {}) {
+function controllerHarness(voiceOverrides: Record<string, unknown> = {}, globals: Record<string, unknown> = {}) {
   const voice = {
+    status: vi.fn(async () => ({ ok: true, configured: true })),
     createSession: vi.fn(async () => ({ ok: true, url: 'wss://example.test/asr?ticket=one-use' })),
     ensureMicrophoneAccess: vi.fn(async () => ({ ok: true, granted: true })),
     ...voiceOverrides,
   };
-  const { context, alerts } = loadVoiceInput(voice);
+  const { context, alerts, windowEvents, documentEvents } = loadVoiceInput(voice, undefined, { globals });
   const sockets: any[] = [];
   const stopped = vi.fn();
   const send = vi.fn();
@@ -704,21 +716,21 @@ function controllerHarness(voiceOverrides: Record<string, unknown> = {}) {
   context.WebSocket = Socket;
   const capture = vi.fn(async () => ({getTracks: () => [{stop:stopped}]}));
   context.navigator.mediaDevices = {getUserMedia:capture};
-  installAudioCaptureStub(context);
+  const captureNodes = installAudioCaptureStub(context);
   const button = makeButton('chat-mic-btn');
   context.window.VoiceInput.attach(button, textarea);
-  const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+  const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
   const start = async () => { button.click(); await settle(); };
   const ownerChange = () => listeners['composer-owner-change']?.();
   return { context, voice, alerts, button, textarea, sockets, capture, stopped, send,
-    replacements, timers, start, settle, ownerChange, invalidate: () => { valid = false; } };
+    replacements, captureNodes, timers, start, settle, ownerChange, windowEvents, documentEvents, invalidate: () => { valid = false; } };
 }
 
 describe('voice input controller ticket and composer ownership', () => {
   it('requests an API key without capturing audio or changing the draft', async () => {
-    const h = controllerHarness({createSession:vi.fn(async () => ({ok:false,error:'E_ORKAS_API_KEY_REQUIRED'}))});
+    const h = controllerHarness({status:vi.fn(async () => ({ok:true,configured:false}))});
     await h.start();
-    expect(h.alerts).toEqual(['Enter an API Key first.']);
+    expect(h.context.uiChoice).toHaveBeenCalledWith(expect.objectContaining({ message: h.context.t('chat.mic_key_required') }));
     expect(h.voice.ensureMicrophoneAccess).not.toHaveBeenCalled();
     expect(h.capture).not.toHaveBeenCalled();
     expect(h.sockets).toEqual([]);
@@ -836,11 +848,11 @@ describe('voice input controller ticket and composer ownership', () => {
     expect(h.textarea.value).toBe('Keep this draft');
   });
 
-  it.each([['session_expired','Enter an API Key first.'],
-    ['insufficient_quota','Not enough credits for voice input.']])('keeps %s failures recoverable without sending', async (reason,message) => {
+  it.each([['invalid_api_key','chat.mic_invalid_key'],
+    ['insufficient_quota','chat.mic_insufficient_credits']])('keeps %s failures recoverable without sending', async (reason,message) => {
     const h = controllerHarness();
     await h.start(); h.sockets[0].open(); h.sockets[0].error(reason);
-    expect(h.alerts).toEqual([message]);
+    expect(h.context.uiChoice).toHaveBeenCalledWith(expect.objectContaining({ message: h.context.t(message) }));
     expect(h.button.dataset.voicePhase).toBe('idle');
     expect(h.stopped).toHaveBeenCalledTimes(1);
     expect(h.timers.size).toBe(0);
@@ -854,6 +866,7 @@ describe('voice input controller ticket and composer ownership', () => {
     socket.result('partial words');
     socket.close(); await h.settle();
     expect(h.textarea.value).toBe('Keep this draft partial words');
+    expect(h.alerts).toEqual([h.context.t('chat.mic_incomplete')]);
     expect(h.button.dataset.voicePhase).toBe('idle');
     expect(h.stopped).toHaveBeenCalledTimes(1);
     expect(h.send).not.toHaveBeenCalled();
@@ -885,6 +898,112 @@ describe('voice input controller ticket and composer ownership', () => {
     expect(h.replacements).toEqual([]);
     expect(h.button.dataset.voicePhase).toBe('idle');
     expect(h.stopped).toHaveBeenCalledTimes(1);
+    expect(h.send).not.toHaveBeenCalled();
+  });
+});
+
+// Remote UI/permission guidance uses the existing controller, preserving all
+// wire-order and composer-owner regression cases above.
+describe('public voice recording controls', () => {
+  it('starts without an introduction and keeps icon-only state across repeat attempts', async () => {
+    const h = controllerHarness();
+    const state = (phase: string, recording: boolean, busy: boolean) => {
+      expect(h.button.dataset.voicePhase).toBe(phase);
+      expect(h.button.classList.contains('is-recording')).toBe(recording);
+      expect(h.button.classList.contains('is-busy')).toBe(busy);
+      expect(h.button.parentNode.insertBefore).not.toHaveBeenCalled();
+    };
+    state('idle', false, false);
+    for (let n = 0; n < 2; n++) {
+      await h.start(); state('connecting', true, false);
+      const socket = h.sockets[n]; socket.open(); state('recording', true, false);
+      h.button.click(); state('finalizing', false, true);
+      expect(h.button.title).toBe(h.context.t('chat.mic_finalizing'));
+      socket.result('review these words', true); await h.settle(); state('idle', false, false);
+    }
+    expect(h.context.uiConfirm).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+  it('keeps a failed status lookup distinct from a missing key', async () => {
+    const h = controllerHarness({ status: vi.fn(async () => ({ ok: false })) });
+    await h.start();
+    expect(h.alerts).toEqual([h.context.t('chat.mic_error_unavailable')]);
+    expect(h.context.uiChoice).not.toHaveBeenCalled();
+    expect(h.voice.createSession).not.toHaveBeenCalled();
+    expect(h.capture).not.toHaveBeenCalled();
+    expect(h.textarea.value).toBe('Keep this draft');
+  });
+  it.each(['Escape', 'hidden', 'unload', 'explicit'])('releases a recording on %s and ignores late transcript', async (event) => {
+    const h = controllerHarness(); await h.start(); const socket = h.sockets[0]; socket.open();
+    if (event === 'Escape') h.documentEvents.keydown({ key: 'Escape' });
+    if (event === 'hidden') { h.context.document.hidden = true; h.documentEvents.visibilitychange(); }
+    if (event === 'unload') h.windowEvents.beforeunload();
+    if (event === 'explicit') h.context.window.VoiceInput.cancel();
+    socket.result('late text', true);
+    expect(h.textarea.value).toBe('Keep this draft');
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    expect(h.button.dataset.voicePhase).toBe('idle');
+    expect(h.alerts).toEqual([]);
+    expect(h.send).not.toHaveBeenCalled();
+  });
+});
+
+// Union boundaries: bounded diagnostics and precise recovery remain independent
+// of successful transcript insertion. Transport faults cannot silently lose audio.
+describe('voice union failure boundaries', () => {
+  it.each(['private-upstream-reason', 'network'])('bounds diagnostic code for %s without retaining payloads', async (reason) => {
+    const records: unknown[][] = [];
+    const log = (...args: unknown[]) => records.push(args);
+    const h = controllerHarness({}, { createLogger: () => ({ info: log, warn: log, error: log }) });
+    await h.start(); const socket = h.sockets[0]; socket.open(); socket.error(reason);
+    const diagnostic = records.find(entry => entry[0] === 'voice client error') as any;
+    expect(diagnostic).toBeDefined();
+    expect(diagnostic[1].error).toEqual({ code: reason === 'network' ? 'network' : 'unknown' });
+    if (reason !== 'network') expect(JSON.stringify(records)).not.toContain(reason);
+    expect(h.textarea.value).toBe('Keep this draft');
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    expect(h.send).not.toHaveBeenCalled();
+  });
+  it('distinguishes a system-policy restriction before ticket exchange or capture', async () => {
+    const h = controllerHarness({ ensureMicrophoneAccess: vi.fn(async () => ({ ok: true, granted: false, status: 'restricted' })) });
+    await h.start();
+    expect(h.alerts).toEqual([h.context.t('chat.mic_error_restricted')]);
+    expect(h.voice.createSession).not.toHaveBeenCalled();
+    expect(h.capture).not.toHaveBeenCalled();
+    expect(h.sockets).toEqual([]);
+    expect(h.button.dataset.voicePhase).toBe('idle');
+    expect(h.textarea.value).toBe('Keep this draft');
+  });
+  it('allows the exact 256KiB queued boundary and cancels before adding audio beyond it', async () => {
+    const h = controllerHarness(); await h.start(); const socket = h.sockets[0]; socket.open();
+    const capture = (sample: number) => h.captureNodes[0].onaudioprocess({
+      inputBuffer: { getChannelData: () => new Float32Array([sample, sample, sample]) },
+    });
+    socket.bufferedAmount = 256 * 1024; capture(.25); await h.settle();
+    expect(socket.send).toHaveBeenCalledTimes(1);
+    socket.bufferedAmount++; capture(.5); await h.settle();
+    expect(socket.send).toHaveBeenCalledTimes(1);
+    expect(socket.close).toHaveBeenCalledTimes(1);
+    expect(h.alerts).toEqual([h.context.t('chat.mic_error_unavailable')]);
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    expect(h.button.dataset.voicePhase).toBe('idle');
+    expect(h.textarea.value).toBe('Keep this draft');
+    expect(h.send).not.toHaveBeenCalled();
+  });
+  it('reports a socket send exception and closes capture without leaking the raw failure', async () => {
+    const records: unknown[][] = []; const log = (...args: unknown[]) => records.push(args);
+    const h = controllerHarness({}, { createLogger: () => ({ info: log, warn: log, error: log }) });
+    await h.start(); const socket = h.sockets[0]; socket.open();
+    socket.send.mockImplementation(() => { throw new Error('private-websocket-send-detail'); });
+    h.captureNodes[0].onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array([.25, .25, .25]) } });
+    await h.settle();
+    expect(socket.send).toHaveBeenCalledTimes(1);
+    expect(socket.close).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(records)).not.toContain('private-websocket-send-detail');
+    expect(h.alerts).toEqual([h.context.t('chat.mic_error_unavailable')]);
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    expect(h.button.dataset.voicePhase).toBe('idle');
+    expect(h.textarea.value).toBe('Keep this draft');
     expect(h.send).not.toHaveBeenCalled();
   });
 });

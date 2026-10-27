@@ -1,23 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ key: 'test-speech-key', uid: 'local-owner' }));
+const state = vi.hoisted(() => ({ key: 'test-speech-key', uid: 'local-owner', status: 'granted', ask: vi.fn(async () => true) }));
 vi.mock('../../../src/main/features/auth', () => ({ getOrkasApiKey: () => state.key }));
 vi.mock('../../../src/main/features/users', () => ({ getActiveUserId: () => state.uid }));
 vi.mock('electron', () => ({ systemPreferences: {
-  getMediaAccessStatus: vi.fn(() => 'granted'), askForMediaAccess: vi.fn(async () => true),
+  getMediaAccessStatus: vi.fn(() => state.status), askForMediaAccess: state.ask,
 } }));
 
-import { createVoiceSession } from '../../../src/main/features/voice_input';
+import { createVoiceSession, getVoiceStatus, ensureMicrophoneAccess } from '../../../src/main/features/voice_input';
 
 const ticket = 't'.repeat(43);
 describe('API-key voice session', () => {
-  beforeEach(() => { state.key = 'test-speech-key'; state.uid = 'local-owner'; });
+  beforeEach(() => { state.key = 'test-speech-key'; state.uid = 'local-owner'; state.status = 'granted'; state.ask.mockClear(); });
   afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
   it('exchanges a main-process credential for a fixed-origin ticket without exposing the key', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ ticket, expires_in: 30, max_seconds: 120 })));
     vi.stubGlobal('fetch', fetcher);
     const result = await createVoiceSession();
+    expect(getVoiceStatus()).toEqual({ configured: true });
     expect(result).toEqual({ ok: true, url: `wss://orkas.ai/api/voice/asr_ws?ticket=${ticket}`, maxSeconds: 120 });
     expect(fetcher).toHaveBeenCalledTimes(1);
     const [url, options] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
@@ -31,14 +32,15 @@ describe('API-key voice session', () => {
   it('requires a configured key before making any request', async () => {
     state.key = '';
     const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
-    expect(await createVoiceSession()).toEqual({ ok: false, error: 'E_ORKAS_API_KEY_REQUIRED' });
+    expect(await createVoiceSession()).toEqual({ ok: false, code: 'api_key_required' });
     expect(fetcher).not.toHaveBeenCalled();
+    expect(getVoiceStatus()).toEqual({ configured: false });
   });
 
   it.each([401, 403, 429, 500])('returns a bounded public failure for HTTP %s', async (status) => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('private upstream error', { status })));
     const result = await createVoiceSession();
-    expect(result).toEqual({ ok: false, error: status === 401 || status === 403 ? 'E_ORKAS_API_KEY_REQUIRED' : 'E_VOICE_UNAVAILABLE' });
+    expect(result).toEqual({ ok: false, code: status === 401 ? 'invalid_api_key' : status === 403 ? 'insufficient_scope' : status === 429 ? 'rate_limit_exceeded' : 'unavailable' });
     expect(JSON.stringify(result)).not.toContain('private');
   });
 
@@ -47,7 +49,7 @@ describe('API-key voice session', () => {
     { url: 'wss://untrusted.example/asr', ticket: '' }, { ticket: 123 },
   ])('rejects malformed ticket responses without constructing an arbitrary transport', async (body) => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body))));
-    expect(await createVoiceSession()).toEqual({ ok: false, error: 'E_VOICE_UNAVAILABLE' });
+    expect(await createVoiceSession()).toEqual({ ok: false, code: 'unavailable' });
   });
 
   it.each(['key', 'uid'])('discards a late ticket when the local %s changes', async (field) => {
@@ -56,7 +58,7 @@ describe('API-key voice session', () => {
     const pending = createVoiceSession();
     state[field as 'key' | 'uid'] = 'replacement';
     finish(new Response(JSON.stringify({ ticket })));
-    expect(await pending).toEqual({ ok: false, error: 'E_VOICE_UNAVAILABLE' });
+    expect(await pending).toEqual({ ok: false, code: 'unavailable' });
   });
 
   it('keeps the timeout active until the control response body finishes', async () => {
@@ -67,6 +69,23 @@ describe('API-key voice session', () => {
     })));
     const pending = createVoiceSession();
     await vi.advanceTimersByTimeAsync(60_001);
-    expect(await pending).toEqual({ ok: false, error: 'E_VOICE_UNAVAILABLE' });
+    expect(await pending).toEqual({ ok: false, code: 'unavailable' });
+  });
+});
+
+// The macOS preflight never repeats a denied prompt; capture remains authoritative
+// on other platforms (unknown is not a verified microphone grant).
+describe('voice microphone preflight', () => {
+  it.each(['denied', 'restricted'])('preserves %s without another OS request', async (status) => {
+    state.status = status; state.ask.mockClear();
+    expect(await ensureMicrophoneAccess('darwin')).toEqual({ granted: false, status });
+    expect(state.ask).not.toHaveBeenCalled();
+  });
+  it('asks only for undecided macOS permission and leaves non-mac capture authoritative', async () => {
+    state.status = 'not-determined'; state.ask.mockClear(); state.ask.mockResolvedValue(true);
+    expect(await ensureMicrophoneAccess('darwin')).toEqual({ granted: true, status: 'granted' });
+    expect(state.ask).toHaveBeenCalledWith('microphone');
+    expect(await ensureMicrophoneAccess('linux')).toEqual({ granted: true, status: 'unknown' });
+    expect(await ensureMicrophoneAccess('win32')).toEqual({ granted: true, status: 'unknown' });
   });
 });

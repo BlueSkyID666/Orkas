@@ -1980,6 +1980,7 @@ function _showAutoDialog() {
 }
 
 function _hideAutoDialog() {
+  window.VoiceInput?.cancel();
   if (_autoDatePicker) _autoDatePicker.close();
   if (_autoEndDatePicker) _autoEndDatePicker.close();
   const overlay = document.getElementById('auto-task-dialog-overlay');
