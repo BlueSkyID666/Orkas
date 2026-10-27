@@ -29,6 +29,7 @@ const embedPackage = `
 const marker = require('@fixture/tokenizer');
 exports.EmbeddingModel = { BGESmallZH: 'fixture-model', CUSTOM: 'custom' };
 exports.FlagEmbedding = { init: async () => ({
+  session: { async run() {} },
   async *embed(texts) { yield texts.map(() => new Float32Array(marker)); }
 }) };
 `;
@@ -140,7 +141,7 @@ describe('Library embedding worker dependency loading', () => {
         assert.equal(options.modelName, 'model_optimized.onnx');
         assert.equal(options.showDownloadProgress, false);
         if (++attempts === 1) throw new Error('private-fixture-model-failure');
-        return { async *embed(texts, batchSize) {
+        return { session: { async run() {} }, async *embed(texts, batchSize) {
           assert.equal(batchSize, 2);
           for (const text of texts) yield [new Float32Array([text.length, attempts])];
         } };
@@ -190,5 +191,83 @@ describe('Library embedding worker dependency loading', () => {
       error: 'native embedding runtime failed to load',
       errorCode: 'E_LIBRARY_NATIVE_ONNX_LOAD',
     });
+  });
+});
+
+describe('Library embedding batch padding', () => {
+  it.each([
+    { name: 'mixed short documents and empty text', texts: ['你好', '中文测试', '', '中'], widths: [6, 3] },
+    { name: 'texts below, at and above the 512-token limit', texts: ['中'.repeat(509), '中'.repeat(510), '中'.repeat(511)], widths: [512, 512] },
+  ])('preserves tokens, masks and ordered vectors for $name', async ({ texts, widths }) => {
+    const requireTest = createRequire(import.meta.url);
+    const sdk = requireTest('fastembed');
+    const ort = createRequire(requireTest.resolve('fastembed'))('onnxruntime-node');
+    const modelRoot = path.resolve(__dirname, '../../../resources/embedding-model');
+    const tokenizer = sdk.FlagEmbedding.loadTokenizer(path.join(modelRoot, sdk.EmbeddingModel.BGESmallZH), 512);
+    // The original tokenizer is the independent content/truncation oracle.
+    // Only ONNX execution is replaced; the installed SDK still builds feeds,
+    // selects CLS output and normalizes the returned vectors.
+    const encoded = await Promise.all(texts.map(text => tokenizer.encode(text)));
+    let offset = 0;
+    const observedWidths: number[] = [];
+    const run = vi.fn(async (feeds: any) => {
+      const [rows, width] = feeds.input_ids.dims;
+      observedWidths.push(width);
+      const data = new Float32Array(rows * width * 2);
+      for (let row = 0; row < rows; row++) {
+        const original = encoded[offset + row];
+        for (const [name, values] of [
+          ['input_ids', original.getIds()],
+          ['attention_mask', original.getAttentionMask()],
+          ['token_type_ids', original.getTypeIds()],
+        ] as const) {
+          expect(feeds[name].dims).toEqual([rows, width]);
+          expect(Array.from(feeds[name].data.slice(row * width, (row + 1) * width), Number))
+            .toEqual(values.slice(0, width));
+        }
+        // Every removed position must be padding, never an effective token.
+        expect(original.getAttentionMask().slice(width).every((value: number) => value === 0)).toBe(true);
+        data[row * width * 2] = original.getIds().reduce((sum: number, id: number) => sum + id, 0);
+        data[row * width * 2 + 1] = 1;
+      }
+      offset += rows;
+      return { last_hidden_state: new ort.Tensor('float32', data, [rows, width, 2]) };
+    });
+    const create = vi.spyOn(ort.InferenceSession, 'create').mockResolvedValue({ run });
+    try {
+      const session = createWorkerSession(workerSourceFile, path.dirname(workerSourceFile), modelRoot);
+      const result = await session.request({ id: 61, type: 'embed', texts, batchSize: 2 });
+      expect(result).toMatchObject({ id: 61, ok: true });
+      expect(observedWidths).toEqual(widths);
+      expect(offset).toBe(texts.length);
+      result.vectors.forEach((vector: number[], index: number) => {
+        const sum = encoded[index].getIds().reduce((a: number, b: number) => a + b, 0);
+        expect(vector[0]).toBeCloseTo(sum / Math.hypot(sum, 1), 6);
+        expect(vector[1]).toBeCloseTo(1 / Math.hypot(sum, 1), 6);
+      });
+    } finally { create.mockRestore(); }
+  });
+
+  it('recovers after an inference failure and resizes later queries independently', async () => {
+    const requireTest = createRequire(import.meta.url);
+    const ort = createRequire(requireTest.resolve('fastembed'))('onnxruntime-node');
+    const modelRoot = path.resolve(__dirname, '../../../resources/embedding-model');
+    const run = vi.fn()
+      .mockRejectedValueOnce(new Error('fixture inference failure'))
+      .mockImplementation(async (feeds: any) => {
+        expect(feeds.input_ids.dims).toEqual([1, 3]);
+        return { last_hidden_state: new ort.Tensor('float32', new Float32Array([3, 4, 0, 0, 0, 0]), [1, 3, 2]) };
+      });
+    const create = vi.spyOn(ort.InferenceSession, 'create').mockResolvedValue({ run });
+    try {
+      const session = createWorkerSession(workerSourceFile, path.dirname(workerSourceFile), modelRoot);
+      expect(await session.request({ id: 71, type: 'embed', texts: ['中'.repeat(600)] }))
+        .toEqual({ id: 71, ok: false, error: 'fixture inference failure' });
+      const result = await session.request({ id: 72, type: 'embed', texts: ['中'] });
+      expect(result).toMatchObject({ id: 72, ok: true });
+      expect(result.vectors[0][0]).toBeCloseTo(0.6, 6);
+      expect(result.vectors[0][1]).toBeCloseTo(0.8, 6);
+      expect(create).toHaveBeenCalledTimes(1);
+    } finally { create.mockRestore(); }
   });
 });
