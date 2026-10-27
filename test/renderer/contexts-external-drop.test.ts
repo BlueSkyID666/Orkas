@@ -99,6 +99,57 @@ function dropEvent(dataTransfer: any, closestEntry: any = null) {
   };
 }
 
+describe('Library rename continuity during status refresh', () => {
+  it.each([true, false].flatMap(available => ['Enter', 'Escape'].map(key => ({ available, key }))))(
+    'keeps the draft and focus until $key (status available: $available)', async ({ available, key }) => {
+    const context = loadContextsScript();
+    const listeners: Record<string, Listener> = {};
+    const input = {
+      value: 'Unsubmitted draft.md',
+      closest: () => ({ dataset: { path: 'original.md' } }),
+      addEventListener: (name: string, listener: Listener) => { listeners[name] = listener; },
+      focus: () => { context.document.activeElement = input; },
+      setSelectionRange: vi.fn(),
+    };
+    let mounted: typeof input | null = input;
+    const container = {
+      querySelector: () => mounted,
+      querySelectorAll: (selector: string) => selector === '.ctx-tree-rename-input' && mounted ? [mounted] : [],
+      addEventListener: vi.fn(), dataset: {}, classList: fakeClassList(),
+      get innerHTML() { return ''; },
+      set innerHTML(_value: string) {
+        // Electron emits blur when a focused input is removed by innerHTML.
+        // This is the observed failure, not an explicit user submission.
+        if (mounted) listeners.blur?.({});
+        mounted = null;
+        context.document.activeElement = null;
+      },
+    };
+    context.document.getElementById = (id: string) => id === 'contexts-tree' ? container : null;
+    context.setTimeout = (callback: () => void) => { callback(); return 0; };
+    context._commitInlineRename = vi.fn(async () => {});
+    context._ctxFetch = vi.fn(async () => ({ json: async () => available
+      ? { ok: true, files: [{ path: 'original.md', status: 'ready' }] }
+      : { ok: false, code: 'E_LIBRARY_STATUS_UNAVAILABLE' } }));
+    vm.runInContext('_ctxPendingRename = { path: "original.md" }; _ctxTree = [{ type: "file", name: "original.md", path: "original.md" }];', context);
+    context._bindCtxTreeHandlers(container);
+    input.value = 'Still composing.md';
+    await context._refreshKbStatusSnapshot();
+    expect(mounted).toBe(input);
+    expect(input.value).toBe('Still composing.md');
+    expect(context.document.activeElement).toBe(input);
+    expect(context._commitInlineRename).not.toHaveBeenCalled();
+    listeners.keydown({ key: 'Enter', isComposing: true });
+    expect(context._commitInlineRename).not.toHaveBeenCalled();
+    listeners.keydown({ key, preventDefault: vi.fn() });
+    if (key === 'Enter') expect(context._commitInlineRename).toHaveBeenCalledExactlyOnceWith('original.md', 'Still composing.md');
+    else expect(context._commitInlineRename).not.toHaveBeenCalled();
+    expect(vm.runInContext('_ctxPendingRename', context)).toBeNull();
+    context.renderCtxTree();
+    expect(mounted).toBeNull();
+  });
+});
+
 describe('Library external file drag-and-drop', () => {
   it('retains hidden and collapsed file status without rebuilding the tree for every event', () => {
     const context = loadContextsScript();

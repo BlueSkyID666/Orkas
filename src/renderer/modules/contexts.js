@@ -492,6 +492,14 @@ function renderCtxTree() {
     _refreshCtxCounts();
     return;
   }
+  // A background refresh must not remove the live rename input: Electron
+  // emits blur on removal, which would submit a draft and interrupt IME.
+  // State keeps updating; submission/cancellation clears the pending rename
+  // and lets the next render apply the accumulated tree/status changes.
+  if (_ctxPendingRename) {
+    const input = container.querySelector('.ctx-tree-rename-input');
+    if (input?.closest('.ctx-tree-wrap')?.dataset.path === _ctxPendingRename.path) return;
+  }
   if (!_ctxTree.length) {
     _ctxSelected.clear();
     _ctxSelectionAnchor = null;
