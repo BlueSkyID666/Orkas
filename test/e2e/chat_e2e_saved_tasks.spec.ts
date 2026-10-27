@@ -91,6 +91,28 @@ test('keeps saved automation and todo shortcuts usable live and after restart', 
   await page.evaluate(() => (window as any).setLang('en'));
   await expect(page.locator('#chat-history [data-saved-task-key] .chat-msg-created-agent-label').first()).toContainText('Open');
   await page.locator('#chat-history [data-saved-task-key]', { hasText: 'Nightly review' }).click();
+  const autoCard = () => page.locator(`#auto-list .auto-row[data-task-id="${automation.task_id}"]`);
+  const expectAutomationFocused = async () => {
+    await expect(autoCard()).toBeInViewport();
+    await expect(autoCard()).toHaveClass(/\bis-highlighted\b/);
+    await expect(page.locator('#auto-list .auto-row.is-highlighted')).toHaveCount(1);
+    await expect(page.locator('#auto-task-dialog-overlay')).toBeHidden();
+    await expect(page.locator(`#auto-list .todo-scope-chip[data-project-id="${project.project.project_id}"]`))
+      .toHaveAttribute('aria-pressed', 'true');
+  };
+  await expectAutomationFocused();
+  const autoHighlight = await autoCard().evaluate(element => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, shadow: style.boxShadow };
+  });
+  await page.screenshot({ path: testInfo.outputPath('automation-shortcut-highlight-en.png') });
+  await expect(autoCard()).not.toHaveClass(/\bis-highlighted\b/);
+  await expect(autoCard()).not.toHaveCSS('background-color', autoHighlight.background);
+  await expect(autoCard()).not.toHaveCSS('box-shadow', autoHighlight.shadow);
+  // Editing remains an explicit action in the card's menu.
+  await autoCard().hover();
+  await autoCard().locator('.auto-row-more').click();
+  await page.locator('.auto-row-menu-item[data-action="edit"]').click();
   await expect(page.locator('#auto-task-dialog-overlay')).toBeVisible();
   await expect(page.locator('#auto-title-input')).toHaveValue('Nightly review');
   await expect(page.locator(`#auto-list .todo-scope-chip[data-project-id="${project.project.project_id}"]`))
@@ -131,10 +153,9 @@ test('keeps saved automation and todo shortcuts usable live and after restart', 
   await page.screenshot({ path: testInfo.outputPath('todo-shortcut-highlight-zh-narrow.png') });
   await page.evaluate((id) => (window as any).setView('conversation', id), cid);
   await page.locator('#chat-history [data-saved-task-key]', { hasText: 'Nightly review' }).click();
-  await expect(page.locator('#auto-task-dialog-overlay')).toBeVisible();
-  await expect(page.locator(`#auto-list .todo-scope-chip[data-project-id="${project.project.project_id}"]`))
-    .toHaveAttribute('aria-pressed', 'true');
-  await page.locator('#auto-dialog-cancel-btn').click();
+  await expectAutomationFocused();
+  await expect(autoCard()).toHaveCSS('background-color', autoHighlight.background);
+  await page.screenshot({ path: testInfo.outputPath('automation-shortcut-highlight-zh-narrow.png') });
   page = await app.relaunch();
   const restored = await app.invoke<{
     conversations: Array<{ conversation_id: string; project_id?: string }>;
@@ -146,7 +167,5 @@ test('keeps saved automation and todo shortcuts usable live and after restart', 
   await page.evaluate(id => (window as any).setView('conversation', id), cid);
   await expect(page.locator('#chat-history [data-saved-task-key]')).toHaveCount(2);
   await page.locator('#chat-history [data-saved-task-key]', { hasText: 'Nightly review' }).click();
-  await expect(page.locator('#auto-title-input')).toHaveValue('Nightly review');
-  await expect(page.locator(`#auto-list .todo-scope-chip[data-project-id="${project.project.project_id}"]`))
-    .toHaveAttribute('aria-pressed', 'true');
+  await expectAutomationFocused();
 });

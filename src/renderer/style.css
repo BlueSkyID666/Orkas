@@ -1735,7 +1735,8 @@ html[dir="rtl"] .project-driver-toggle[aria-pressed="true"] .project-driver-swit
 .project-todo-item:hover {
   background: var(--surface-2);
 }
-.todo-board .project-todo-item.is-highlighted {
+.todo-board .project-todo-item.is-highlighted,
+.auto-row.is-highlighted {
   background: var(--primary-soft);
   box-shadow: inset 0 0 0 1px var(--primary);
 }

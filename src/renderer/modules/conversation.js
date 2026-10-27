@@ -5435,7 +5435,10 @@ function _mountSavedTaskChips(msg, tasks) {
       button.disabled = true;
       try {
         if (task.kind === 'automation') {
-          await _APP_NAV_SURFACES.auto.open({ action: 'configure', target_id: task.task_id });
+          await _appNavOpenFeatureView('auto', 'auto', () => {
+            if (typeof window.focusAutoTaskById !== 'function') return false;
+            return window.focusAutoTaskById(task.task_id);
+          });
         } else {
           await _appNavLoadFeature('project', () => {
             if (typeof focusTodo !== 'function') return false;

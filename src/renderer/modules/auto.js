@@ -143,6 +143,9 @@ let _autoLoadedOnce = false;
 // Presentation-only: preserve the selected scope across list refreshes.
 let _autoActiveScope = null;
 const _autoExpandedRows = new Set();
+let _autoFocusGeneration = 0;
+let _autoHighlightedTaskId = '';
+let _autoHighlightTimer = null;
 let _autoFormMounted = false;  // _aiSelectMount only once
 let _autoEditingTaskId = null; // null = create mode, taskId = edit mode
 // Current persistent installation identity — fetched lazily on first row
@@ -984,7 +987,9 @@ function _autoRenderList() {
     section.appendChild(empty);
   }
   for (const task of group.tasks) {
-    cards.appendChild(_autoRenderRow(task, { onEdit, afterChange, expanded: _autoExpandedRows.has(task.id) }));
+    const row = _autoRenderRow(task, { onEdit, afterChange, expanded: _autoExpandedRows.has(task.id) });
+    if (task.id === _autoHighlightedTaskId) row.classList.add('is-highlighted');
+    cards.appendChild(row);
   }
   if (group.tasks.length) section.appendChild(cards);
   listEl.appendChild(section);
@@ -2269,6 +2274,36 @@ if (typeof window !== 'undefined') {
   window.refreshAutoProjectGroups = _autoRenderList;
   window.loadProjectAutoList = loadProjectAutoList;
   window.openAutoTaskDialog = openAutoTaskDialog;
+  // Saved-task shortcuts reveal the current list entry; editing is explicit.
+  window.focusAutoTaskById = async function focusAutoTaskById(taskId) {
+    const id = String(taskId || '').trim();
+    if (!id) return false;
+    const generation = ++_autoFocusGeneration;
+    const navigationEpoch = typeof _composerNavigationEpoch === 'number' ? _composerNavigationEpoch : null;
+    await loadAutoList(true);
+    // A newer shortcut or navigation consumed this action. Do not turn a safe
+    // no-op into app navigation's unavailable-target failure.
+    if (generation !== _autoFocusGeneration
+        || (navigationEpoch !== null && navigationEpoch !== _composerNavigationEpoch)) return true;
+    if (typeof currentView !== 'undefined' && currentView !== 'auto') return false;
+    const task = _autoTasks.find((candidate) => candidate && candidate.id === id);
+    if (!task) return false;
+    _autoActiveScope = task.project_id || '';
+    _autoHighlightedTaskId = id;
+    clearTimeout(_autoHighlightTimer);
+    _autoRenderList();
+    const list = document.getElementById('auto-list');
+    const row = Array.from(list?.querySelectorAll('.auto-row') || [])
+      .find((candidate) => candidate.dataset.taskId === id);
+    row?.scrollIntoView({ block: 'center' });
+    _autoHighlightTimer = setTimeout(() => {
+      _autoHighlightedTaskId = '';
+      _autoHighlightTimer = null;
+      document.getElementById('auto-list')?.querySelectorAll('.auto-row.is-highlighted')
+        .forEach((candidate) => candidate.classList.remove('is-highlighted'));
+    }, 2500);
+    return !!row;
+  };
   window.openAutoTaskById = async function openAutoTaskById(taskId) {
     const id = String(taskId || '').trim();
     if (!id) return false;
