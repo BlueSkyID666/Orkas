@@ -193,7 +193,8 @@ function loadWorkletCapture(sourcePath: string, options: {
   });
   const nodes: any[] = [];
   const sockets: any[] = [];
-  const timers = new Map<number, { callback: () => void; delay: number }>();
+  const timers = new Map<number, { callback: () => void; delay: number; dueAt: number }>();
+  let elapsed = 0;
   let timerId = 0;
   let tracksStopped = 0;
   let Processor: any;
@@ -272,16 +273,30 @@ function loadWorkletCapture(sourcePath: string, options: {
     getUserMedia: () => options.delayedPermission ? permission : Promise.resolve(stream),
   };
   context.setTimeout = (callback: () => void, delay: number) => {
-    timers.set(++timerId, { callback, delay });
+    timers.set(++timerId, { callback, delay, dueAt: elapsed + delay });
     return timerId;
   };
   context.clearTimeout = (id: number) => timers.delete(id);
   const errors: Error[] = [];
   const opened: boolean[] = [];
+  const results: Array<{ text: string; last: boolean }> = [];
   const client = context.window.VoiceInput.createClient('wss://example.test/asr', {
     onOpen: () => opened.push(true),
     onError: (error: Error) => errors.push(error),
+    onResult: (result: { text: string; last: boolean }) => results.push(result),
   });
+  const advanceTime = (ms: number) => {
+    const target = elapsed + ms;
+    while (true) {
+      const next = [...timers.entries()].filter(([, timer]) => timer.dueAt <= target)
+        .sort((a, b) => a[1].dueAt - b[1].dueAt)[0];
+      if (!next) break;
+      elapsed = next[1].dueAt;
+      timers.delete(next[0]);
+      next[1].callback();
+    }
+    elapsed = target;
+  };
   const processSamples = (count: number) => {
     for (let offset = 0; offset < count; offset += 128) {
       nodes.at(-1).processor.process(
@@ -291,7 +306,7 @@ function loadWorkletCapture(sourcePath: string, options: {
     }
   };
   return {
-    client, nodes, sockets, errors, opened, timers, processSamples, releaseModule,
+    client, nodes, sockets, errors, opened, results, timers, advanceTime, processSamples, releaseModule,
     grantPermission: () => grantPermission(stream),
     tracksStopped: () => tracksStopped,
   };
@@ -443,6 +458,67 @@ describe.each([
 describe.each([
   ['desktop', path.join(__dirname, '../../src/renderer/modules/voice-input.js')],
 ])('%s worklet capture ownership', (_platform, sourcePath) => {
+  it.each(['handshake', 'capture initialization'])('bounds stalled %s and ignores its late completion', async (stage) => {
+    const fixture = loadWorkletCapture(sourcePath, { delayedModule: stage === 'capture initialization' });
+    await fixture.client.start();
+    // Public ticket peers must send ready before capture initialization begins.
+    if (stage === 'capture initialization') fixture.sockets[0].open();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    fixture.advanceTime(59_999);
+    expect(fixture.errors).toEqual([]);
+    expect(fixture.tracksStopped()).toBe(0);
+    fixture.advanceTime(1);
+    fixture.sockets[0].open();
+    fixture.releaseModule();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(fixture.opened).toEqual([]);
+    expect(fixture.nodes).toEqual([]);
+    expect(fixture.errors.map(error => (error as Error & { code: string }).code)).toEqual(['network']);
+    expect(fixture.tracksStopped()).toBe(1);
+    expect(fixture.sockets[0].readyState).toBe(3);
+    expect(fixture.timers.size).toBe(0);
+    fixture.client.close();
+  });
+
+  it('retains a final transcript arriving two seconds after stop and clears its deadline', async () => {
+    const fixture = loadWorkletCapture(sourcePath);
+    await fixture.client.start(); fixture.sockets[0].open(false);
+    expect(fixture.opened).toEqual([]);
+    fixture.sockets[0].ready();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(fixture.opened).toEqual([true]);
+    fixture.processSamples(128);
+    fixture.client.stop();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(fixture.sockets[0].frames.at(-1)).toBe('__END__');
+    fixture.advanceTime(2000);
+    expect(fixture.sockets[0].readyState).toBe(1);
+    fixture.sockets[0].onmessage({ data: JSON.stringify({
+      is_last_package: true, payload_msg: { result: { text: 'The final words survive.' } },
+    }) });
+    expect(fixture.results).toEqual([{ text: 'The final words survive.', last: true }]);
+    expect(fixture.errors).toEqual([]);
+    expect(fixture.tracksStopped()).toBe(1);
+    expect(fixture.timers.size).toBe(0);
+  });
+
+  it('bounds the remote final-response wait without leaving a live microphone or socket', async () => {
+    const fixture = loadWorkletCapture(sourcePath);
+    await fixture.client.start(); fixture.sockets[0].open();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    fixture.client.stop();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(fixture.sockets[0].frames.at(-1)).toBe('__END__');
+    fixture.advanceTime(9999);
+    expect(fixture.sockets[0].readyState).toBe(1);
+    fixture.advanceTime(1);
+    expect(fixture.sockets[0].readyState).toBe(3);
+    expect(fixture.tracksStopped()).toBe(1);
+    expect(fixture.results).toEqual([]);
+    expect(fixture.errors).toEqual([]);
+    expect(fixture.timers.size).toBe(0);
+  });
+
   it('flushes the final partial 200ms packet before END and releases the microphone immediately', async () => {
     const fixture = loadWorkletCapture(sourcePath);
     await fixture.client.start();
@@ -1159,6 +1235,7 @@ describe('merged remote voice admission and editor lifetime', () => {
     h.context.clearInterval = (id: number) => watchers.delete(id);
     await h.start(); const socket = h.sockets[0]; socket.open(); await h.settle();
     expect(watchers.size).toBe(1);
+    const oldWatcher = [...watchers.values()][0];
     h.textarea.getClientRects = () => [];
     for (const callback of [...watchers.values()]) callback();
     socket.result('belongs to the hidden composer', true); await h.settle();
@@ -1168,6 +1245,23 @@ describe('merged remote voice admission and editor lifetime', () => {
     expect(h.button.dataset.voicePhase).toBe('idle');
     expect(h.textarea.value).toBe('Keep this draft');
     expect(h.alerts).toEqual([]);
+    expect(h.send).not.toHaveBeenCalled();
+    h.textarea.getClientRects = () => [1];
+    await h.start(); const replacement = h.sockets[1]; replacement.open(); await h.settle();
+    // A queued old tick must not cancel the new attempt, even when the editor
+    // becomes hidden again before the replacement's own watcher runs.
+    h.textarea.getClientRects = () => [];
+    oldWatcher();
+    expect(h.button.dataset.voicePhase).toBe('recording');
+    expect(replacement.close).not.toHaveBeenCalled();
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    expect(watchers.size).toBe(1);
+    [...watchers.values()][0]();
+    expect(h.stopped).toHaveBeenCalledTimes(2);
+    expect(replacement.close).toHaveBeenCalledTimes(1);
+    expect(watchers.size).toBe(0);
+    expect(h.button.dataset.voicePhase).toBe('idle');
+    expect(h.textarea.value).toBe('Keep this draft');
     expect(h.send).not.toHaveBeenCalled();
   });
   it('ignores an old ticket result after the same client starts a replacement capture', async () => {
