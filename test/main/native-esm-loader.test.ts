@@ -1,3 +1,4 @@
+import { finished } from 'node:stream/promises';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,8 +16,8 @@ beforeEach(() => {
   fs.mkdirSync(path.join(root, 'src/main'), { recursive: true });
   fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
   fs.copyFileSync(path.join(project, 'bootstrap.cjs'), path.join(root, 'bootstrap.cjs'));
-  const helper = path.join(project, 'src/main/util/native-esm-loader.js');
   fs.copyFileSync(path.join(project, 'src/main/install-data-root.cjs'), path.join(root, 'src/main/install-data-root.cjs'));
+  const helper = path.join(project, 'src/main/util/native-esm-loader.js');
   fs.mkdirSync(path.join(root, 'src/main/util'));
   if (fs.existsSync(helper)) fs.copyFileSync(helper, path.join(root, 'src/main/util/native-esm-loader.js'));
   fs.writeFileSync(path.join(dependency, 'package.json'), JSON.stringify({ name: 'fixture', type: 'module', exports: './index.mjs' }));
@@ -67,7 +68,7 @@ async function run(body: string, env: Record<string, string> = {}, packed = fals
     for (const name of ['bootstrap.cjs', 'src', 'node_modules', 'fault-loader.mjs']) {
       fs.cpSync(path.join(root, name), path.join(stage, name), { recursive: true });
     }
-    await (await import('@electron/asar')).createPackage(stage, archive);
+    await finished(await (await import('@electron/asar')).createPackage(stage, archive));
     entry = path.join(archive, 'bootstrap.cjs');
   }
   const output = await execute(process.execPath, [entry], {
@@ -93,6 +94,23 @@ describe('native ESM dependency loading', () => {
     expect(isAsarStatsDeprecation(warning.replace(`${label} --trace`, 'other --trace'), executable)).toBe(false);
   });
 
+  it('resolves a shared native dependency once across a diamond graph', async () => {
+    fs.writeFileSync(path.join(dependency, 'shared.mjs'), 'export const identity = {};');
+    for (const name of ['left', 'right']) {
+      fs.writeFileSync(path.join(dependency, `${name}.mjs`), "export { identity } from './shared.mjs';");
+    }
+    fs.writeFileSync(path.join(dependency, 'index.mjs'), "export { identity as left } from './left.mjs'; export { identity as right } from './right.mjs';");
+    expect(await run(`
+      const original = fs.realpathSync;
+      let probes = 0;
+      fs.realpathSync = function(value, ...args) {
+        if (String(value).endsWith('shared.mjs')) probes++;
+        return original.call(this, value, ...args);
+      };
+      const value = await import('fixture');
+      return { shared: value.left === value.right, probes };
+    `)).toEqual({ value: { shared: true, probes: 1 } });
+  });
   it('loads unchanged native dependency bytes and one shared instance without the transpilation worker', async () => {
     fs.writeFileSync(path.join(dependency, 'shared.mjs'), 'globalThis.initialized = (globalThis.initialized || 0) + 1; export let value = 20; export function add() { value++; }');
     fs.writeFileSync(path.join(dependency, 'index.mjs'), "import { value, add } from './shared.mjs'; export { value } from './shared.mjs'; add(); export const answer = value * 2;");

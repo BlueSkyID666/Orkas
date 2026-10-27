@@ -20,6 +20,10 @@ function registerNativeEsmLoader() {
     || process.execArgv.some(arg => arg.startsWith('--preserve-symlinks'))
     || String(process.env.NODE_OPTIONS || '').includes('--preserve-symlinks')) return null;
   const nativeModules = new Set();
+  // ESM retains module identity for the process lifetime. Reuse successful
+  // canonical resolutions too: SDK graphs import the same leaves repeatedly,
+  // and realpathSync otherwise walks every parent directory on every edge.
+  const nativeResolutions = new Map();
   return registerHooks({
     resolve(specifier, context, nextResolve) {
       const isImport = !context.conditions.includes('require');
@@ -27,10 +31,15 @@ function registerNativeEsmLoader() {
         && (specifier.startsWith('./') || specifier.startsWith('../') || specifier.startsWith('file:'))) {
         try {
           const url = new URL(specifier, context.parentURL);
+          if (ordinaryDependency(url, context) && nativeResolutions.has(url.href)) {
+            return { url: nativeResolutions.get(url.href), format: 'module', shortCircuit: true };
+          }
           if (ordinaryDependency(url, context) && fs.statSync(url).isFile()) {
             const physical = pathToFileURL(fs.realpathSync(fileURLToPath(url)));
             if (physical.pathname.endsWith('.mjs')) {
               nativeModules.add(physical.href);
+              nativeResolutions.set(url.href, physical.href);
+              nativeResolutions.set(physical.href, physical.href);
               return { url: physical.href, format: 'module', shortCircuit: true };
             }
           }
@@ -39,6 +48,7 @@ function registerNativeEsmLoader() {
       const result = nextResolve(specifier, context);
       if (isImport && result.format === 'module' && ordinaryDependency(new URL(result.url), context)) {
         nativeModules.add(result.url);
+        nativeResolutions.set(result.url, result.url);
       }
       return result;
     },
