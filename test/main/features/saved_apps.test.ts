@@ -67,6 +67,62 @@ async function makeArtifact(title: string, extra: Array<{ path: string; content:
 }
 
 describe('saved_apps › saveFromArtifact', () => {
+  it('preserves the editing destination after a short context refresh write and recovers the next update', async () => {
+    const { savedApps, chatArtifacts } = await mods();
+    const saved = await savedApps.saveFromArtifact(UID, CID, await makeArtifact('Original'));
+    if (!saved.ok) throw new Error(saved.error);
+    const edit = await savedApps.openForEditing(UID, saved.id);
+    if (!edit.ok) throw new Error(edit.error);
+    const cid = (edit.conversation as any).conversation_id;
+    const root = path.join(tmpDir, UID, 'local/app-edits', cid);
+    const contextFile = path.join(root, 'context.json');
+    const before = fs.readFileSync(contextFile, 'utf8');
+    const revision = await chatArtifacts.createArtifact(UID, cid, 'helper', {
+      files: [{ path: 'index.html', content: '<h1>Committed revision</h1>' }],
+    });
+    if (!revision.ok) throw new Error(revision.error);
+    const nodeFs = (await import('node:fs')).default;
+    const { syncBuiltinESMExports } = await import('node:module');
+    const originalWrite = nodeFs.writeFileSync;
+    const canonicalRoot = fs.realpathSync(root);
+    let injected = 0;
+    const spy = vi.spyOn(nodeFs, 'writeFileSync').mockImplementation(((file: any, data: any, options?: any) => {
+      if (typeof file === 'string' && fs.realpathSync(path.dirname(file)) === canonicalRoot
+        && path.basename(file).startsWith('context.json')) {
+        injected++;
+        originalWrite(file, String(data).slice(0, 5), options);
+        throw Object.assign(new Error('synthetic context disk full'), { code: 'ENOSPC' });
+      }
+      return originalWrite(file, data, options);
+    }) as any);
+    syncBuiltinESMExports();
+    try {
+      expect(await savedApps.saveFromArtifact(UID, cid, revision.artifactId, 'update'))
+        .toMatchObject({ ok: true, id: saved.id });
+    } finally { spy.mockRestore(); syncBuiltinESMExports(); }
+    expect(injected).toBe(1);
+    expect.soft(fs.readFileSync(contextFile, 'utf8')).toBe(before);
+    await expect.soft(savedApps.getEditTarget(UID, cid)).resolves.toMatchObject({ appId: saved.id });
+    const entry = path.join(APPS_ROOT(), saved.id, 'index.html');
+    expect(fs.readFileSync(entry, 'utf8')).toContain('Committed revision');
+    expect(fs.existsSync(path.join(root, 'save-journal.json'))).toBe(true);
+
+    // Reopening the list performs the normal journal recovery, without replaying the save.
+    expect(savedApps.listSavedApps(UID).map(app => app.id)).toEqual([saved.id]);
+    await expect.soft(savedApps.getEditTarget(UID, cid)).resolves.toMatchObject({ appId: saved.id });
+    expect(fs.existsSync(path.join(root, 'save-journal.json'))).toBe(false);
+    const next = await chatArtifacts.createArtifact(UID, cid, 'helper', {
+      files: [{ path: 'index.html', content: '<h1>Next revision</h1>' }],
+    });
+    if (!next.ok) throw new Error(next.error);
+    expect(await savedApps.saveFromArtifact(UID, cid, next.artifactId, 'update'))
+      .toMatchObject({ ok: true, id: saved.id });
+    expect(savedApps.listSavedApps(UID).map(app => app.id)).toEqual([saved.id]);
+    expect(savedApps.resolveSavedAppIndex(UID, saved.id)).toMatchObject({ ok: true });
+    expect(fs.readFileSync(entry, 'utf8')).toContain('Next revision');
+    expect(fs.readdirSync(APPS_ROOT())).toEqual([saved.id]);
+  });
+
   it.each(['update', 'export'] as const)('preserves committed %s results and releases the data lease when backup cleanup fails', async mode => {
     const logging = await import('../../../src/main/logger');
     const createLogger = logging.createLogger;

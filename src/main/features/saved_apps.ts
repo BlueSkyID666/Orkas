@@ -1131,7 +1131,7 @@ function refreshEditSnapshot(uid: string,cid: string,context: EditContext,source
   if(fs.existsSync(snapshot))fs.renameSync(snapshot,previous);
   try {fs.renameSync(next,snapshot);} catch(error) {if(fs.existsSync(previous))fs.renameSync(previous,snapshot);throw error;}
   context.fingerprint=fingerprintApp(source);
-  fs.writeFileSync(path.join(root,'context.json'),JSON.stringify(context));
+  writeTextAtomicSync(path.join(root,'context.json'),JSON.stringify(context));
   fs.rmSync(previous,{recursive:true,force:true});
 }
 
