@@ -31,10 +31,6 @@ export function normaliseSeedreamSize(size: string, model: string): string {
   return `${w}x${h}`;
 }
 
-export function normaliseManagedImageSize(size: string): string {
-  return normaliseSeedreamSize(size, 'doubao-seedream-5-0-flash-260915');
-}
-
 type GeminiImageConfig = { aspectRatio: string; imageSize?: '512' | '1K' | '2K' | '4K' };
 
 // Exact pixel pairs from the GenerateContent tables (not mathematical aspect
