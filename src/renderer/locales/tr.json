@@ -2473,7 +2473,7 @@
   "connectors.catalog.shippo.description": "Gönderileri, etiketleri, takibi, iadeleri, geri ödemeleri, yük manifestolarını ve gümrük verilerini yönetin.",
   "connectors.catalog.square.description": "Square kataloğu, envanteri, müşterileri, siparişleri, ödemeleri, geri ödemeleri, faturaları, abonelikleri, sadakat programı, hediye kartları ve itirazları için işletmenin kendi Personal Access Token bilgisini kullanın.",
   "connectors.catalog.dialpad.description": "Kişileri ve çağrı dökümlerini görüntüleyin; arama yapın ve SMS gönderin.",
-  "project.menu.invite_members": "Proje üyelerini davet et",
+  "project.menu.invite_members": "Üye davet et",
   "project.invite_members.commercial_only": "Proje üyelerini davet etmek Orkas ticari sürüm üyeliği gerektirir. Paylaşılan projeleri kullanmak için ticari uygulamayı indirin ve bir plana abone olun.",
   "project.invite_members.download": "Ticari sürümü indir",
   "project.invite_members.open_failed": "İndirme sayfası açılamadı. Tekrar deneyin.",

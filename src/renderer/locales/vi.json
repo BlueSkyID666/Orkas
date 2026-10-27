@@ -2473,7 +2473,7 @@
   "connectors.catalog.shippo.description": "Quản lý lô hàng, nhãn, theo dõi vận chuyển, hàng trả lại, hoàn tiền, bản kê hàng hóa và dữ liệu hải quan.",
   "connectors.catalog.square.description": "Dùng Personal Access Token của chính thương nhân cho danh mục, tồn kho, khách hàng, đơn hàng, thanh toán, hoàn tiền, hóa đơn, gói đăng ký, chương trình khách hàng thân thiết, thẻ quà tặng và tranh chấp trên Square.",
   "connectors.catalog.dialpad.description": "Xem danh bạ và bản chép lời cuộc gọi; gọi điện và gửi SMS.",
-  "project.menu.invite_members": "Mời thành viên dự án",
+  "project.menu.invite_members": "Mời thành viên",
   "project.invite_members.commercial_only": "Mời thành viên dự án là tính năng dành cho hội viên Orkas phiên bản thương mại. Tải ứng dụng thương mại và đăng ký gói thành viên để sử dụng dự án chung.",
   "project.invite_members.download": "Tải phiên bản thương mại",
   "project.invite_members.open_failed": "Không thể mở trang tải xuống. Vui lòng thử lại.",

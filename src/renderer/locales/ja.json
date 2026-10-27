@@ -2473,7 +2473,7 @@
   "connectors.catalog.shippo.description": "出荷、ラベル、追跡、返品、返金、積荷目録、通関情報を管理します。",
   "connectors.catalog.square.description": "加盟店自身の Personal Access Token で Square のカタログ、在庫、顧客、注文、支払、返金、請求書、サブスクリプション、ロイヤルティ、ギフトカード、異議申し立てを管理します。",
   "connectors.catalog.dialpad.description": "連絡先や通話の文字起こしを確認し、発信や SMS 送信を行います。",
-  "project.menu.invite_members": "プロジェクトメンバーを招待",
+  "project.menu.invite_members": "メンバーを招待",
   "project.invite_members.commercial_only": "プロジェクトメンバーの招待は Orkas 商用版の会員機能です。共有プロジェクトを使うには商用版をダウンロードして会員プランに登録してください。",
   "project.invite_members.download": "商用版をダウンロード",
   "project.invite_members.open_failed": "ダウンロードページを開けませんでした。ブラウザで orkas.ai/download/ にアクセスしてください。",

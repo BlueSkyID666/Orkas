@@ -2473,7 +2473,7 @@
   "connectors.catalog.shippo.description": "Verwalten Sie Sendungen, Etiketten, Sendungsverfolgung, Retouren, Erstattungen, Frachtlisten und Zolldaten.",
   "connectors.catalog.square.description": "Verwenden Sie den eigenen Personal Access Token des Händlers für den Square-Katalog, Bestände, Kunden, Bestellungen, Zahlungen, Erstattungen, Rechnungen, Abonnements, Kundenbindung, Geschenkkarten und Streitfälle.",
   "connectors.catalog.dialpad.description": "Sehen Sie Kontakte und Anruftranskripte ein; tätigen Sie Anrufe und senden Sie SMS.",
-  "project.menu.invite_members": "Projektmitglieder einladen",
+  "project.menu.invite_members": "Mitglieder einladen",
   "project.invite_members.commercial_only": "Das Einladen von Projektmitgliedern ist eine Mitgliedschaftsfunktion der kommerziellen Orkas Version. Lade die kommerzielle App herunter und wähle einen Tarif, um gemeinsame Projekte zu nutzen.",
   "project.invite_members.download": "Kommerzielle App herunterladen",
   "project.invite_members.open_failed": "Die Downloadseite konnte nicht geöffnet werden. Besuche orkas.ai/download/ im Browser.",

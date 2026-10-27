@@ -2473,7 +2473,7 @@
   "connectors.catalog.shippo.description": "管理出貨、託運標籤、追蹤、退貨、退款、貨物清單及報關資料。",
   "connectors.catalog.square.description": "使用商家自有 Personal Access Token 處理 Square 目錄、庫存、客戶、訂單、付款、退款、發票、訂閱、忠誠度計畫、禮品卡及爭議。",
   "connectors.catalog.dialpad.description": "檢視聯絡人及通話逐字稿；撥打電話及傳送 SMS。",
-  "project.menu.invite_members": "邀請專案成員",
+  "project.menu.invite_members": "邀請成員",
   "project.invite_members.commercial_only": "邀請專案成員是 Orkas 商業版會員功能。下載商業版並開通會員後即可使用共享專案。",
   "project.invite_members.download": "下載商業版",
   "project.invite_members.open_failed": "無法開啟下載頁面，請重試。",

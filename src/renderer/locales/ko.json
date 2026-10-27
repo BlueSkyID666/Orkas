@@ -2473,7 +2473,7 @@
   "connectors.catalog.shippo.description": "배송, 운송장, 추적, 반품, 환불, 적하 목록, 통관 데이터를 관리합니다.",
   "connectors.catalog.square.description": "판매자 본인의 Personal Access Token으로 Square 카탈로그, 재고, 고객, 주문, 결제, 환불, 청구서, 구독, 로열티, 기프트 카드, 분쟁을 관리합니다.",
   "connectors.catalog.dialpad.description": "연락처와 통화 내용을 조회하고 전화를 걸고 SMS를 보냅니다.",
-  "project.menu.invite_members": "프로젝트 멤버 초대",
+  "project.menu.invite_members": "멤버 초대",
   "project.invite_members.commercial_only": "프로젝트 멤버 초대는 Orkas 상용 버전의 멤버십 기능입니다. 공유 프로젝트를 사용하려면 상용 앱을 다운로드하고 요금제에 가입하세요.",
   "project.invite_members.download": "상용 버전 다운로드",
   "project.invite_members.open_failed": "다운로드 페이지를 열 수 없습니다. 브라우저에서 orkas.ai/download/에 접속하세요.",

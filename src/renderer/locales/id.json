@@ -2473,7 +2473,7 @@
   "connectors.catalog.shippo.description": "Kelola pengiriman, label, pelacakan, pengembalian, pengembalian uang, manifes, dan data bea cukai.",
   "connectors.catalog.square.description": "Gunakan Token Akses Pribadi pedagang sendiri untuk katalog Square, inventaris, pelanggan, pesanan, pembayaran, pengembalian dana, faktur, langganan, loyalitas, kartu hadiah, dan perselisihan.",
   "connectors.catalog.dialpad.description": "Lihat kontak dan transkrip panggilan; melakukan panggilan dan mengirim SMS.",
-  "project.menu.invite_members": "Undang anggota proyek",
+  "project.menu.invite_members": "Undang anggota",
   "project.invite_members.commercial_only": "Mengundang anggota proyek memerlukan keanggotaan Orkas versi komersial. Unduh aplikasi komersial dan berlangganan untuk menggunakan proyek bersama.",
   "project.invite_members.download": "Unduh versi komersial",
   "project.invite_members.open_failed": "Halaman unduhan tidak dapat dibuka. Coba lagi.",

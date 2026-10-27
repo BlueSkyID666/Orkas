@@ -2473,7 +2473,7 @@
   "connectors.catalog.shippo.description": "Gerencie envios, etiquetas, rastreamento, devoluções, reembolsos, manifestos e dados alfandegários.",
   "connectors.catalog.square.description": "Use um Personal Access Token próprio para catálogo, estoque, clientes, pedidos, pagamentos, reembolsos, faturas, assinaturas, fidelidade, cartões-presente e disputas no Square.",
   "connectors.catalog.dialpad.description": "Consulte contatos e transcrições; faça chamadas e envie SMS.",
-  "project.menu.invite_members": "Convidar membros do projeto",
+  "project.menu.invite_members": "Convidar membros",
   "project.invite_members.commercial_only": "Convidar membros do projeto é um recurso de assinatura da versão comercial do Orkas. Baixe o aplicativo comercial e assine um plano para usar projetos compartilhados.",
   "project.invite_members.download": "Baixar versão comercial",
   "project.invite_members.open_failed": "Não foi possível abrir a página de download. Acesse orkas.ai/download/ no navegador.",

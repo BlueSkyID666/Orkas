@@ -2,7 +2,7 @@
 // Drives `#panel-project`: shows the project composer, task panes, and a
 // right-side rail for project agents + files.
 //
-// Header carries the title and a menu with Rename and Delete.
+// Header carries the title and a menu with Invite members, Rename and Delete.
 // The sidebar provides back navigation.
 //
 // Add picker and project-file viewer are centered modals (`.modal-overlay`)
@@ -4858,11 +4858,12 @@ async function _openAddPicker() {
   setTimeout(() => searchEl.focus(), 0);
 }
 
-// ── Header actions: "⋯" menu with Rename / Delete ──────────────────────
+// ── Header actions: "⋯" menu with Invite members / Rename / Delete ─────
 
 function _projectHeaderMenuItems() {
   if (!_projectDetailPid || !_projectDetailMeta?.project) return [];
   return [
+    { label: t('project.menu.invite_members'), onClick: () => _showProjectMemberInviteGate() },
     { label: t('project.action.rename'), onClick: () => _onRenameAction() },
     { label: t('project.action.delete'), onClick: () => _onDeleteAction() },
   ];

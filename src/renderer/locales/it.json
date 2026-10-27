@@ -2473,7 +2473,7 @@
   "connectors.catalog.shippo.description": "Gestisci spedizioni, etichette, tracciamento, resi, rimborsi, manifesti di spedizione e dati doganali.",
   "connectors.catalog.square.description": "Usa il Personal Access Token del commerciante per catalogo, scorte, clienti, ordini, pagamenti, rimborsi, fatture, abbonamenti, fidelizzazione, carte regalo e contestazioni su Square.",
   "connectors.catalog.dialpad.description": "Visualizza contatti e trascrizioni delle chiamate; effettua chiamate e invia SMS.",
-  "project.menu.invite_members": "Invita membri del progetto",
+  "project.menu.invite_members": "Invita membri",
   "project.invite_members.commercial_only": "Invitare membri del progetto è una funzione riservata agli abbonati della versione commerciale di Orkas. Scarica l'app commerciale e scegli un piano per usare i progetti condivisi.",
   "project.invite_members.download": "Scarica la versione commerciale",
   "project.invite_members.open_failed": "Impossibile aprire la pagina di download. Visita orkas.ai/download/ nel browser.",

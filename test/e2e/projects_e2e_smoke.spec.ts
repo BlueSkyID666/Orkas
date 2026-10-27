@@ -154,12 +154,8 @@ test.describe('projects', () => {
     const row = page.locator('.project-row', {
       has: page.locator('.project-name', { hasText: projectName }),
     });
-    const guidance = await page.evaluate(() => (globalThis as any).t('project.invite_members.commercial_only'));
-    const inviteLabel = await page.evaluate(() => (globalThis as any).t('project.menu.invite_members'));
-    const headerInvite = page.locator('#panel-project .project-detail-actions').getByRole('button', { name: inviteLabel, exact: true });
-    await expect(headerInvite).toHaveCount(0);
-    await page.locator('#panel-project').screenshot({ path: testInfo.outputPath('project-member-invite-entry.png') });
     const cancelGuide = async () => {
+      const guidance = await page.evaluate(() => (globalThis as any).t('project.invite_members.commercial_only'));
       const dialog = page.locator('.ui-dialog-overlay:visible');
       await expect(dialog.locator('.ui-dialog-message')).toHaveText(guidance);
       await expect(dialog.locator('[data-act="ok"]')).toBeVisible();
@@ -171,12 +167,27 @@ test.describe('projects', () => {
       await expect(page.locator('#project-detail-title')).toHaveText(projectName);
       await expect(row).toHaveCount(1);
     };
-    await row.hover();
-    await row.locator('[data-project-menu]').click();
-    const invite = page.locator('#project-row-menu [data-action="invite-members"]');
-    await expect(invite).toBeVisible();
-    await invite.click();
-    await cancelGuide();
+    for (const { locale, width, inviteLabel } of [
+      { locale: 'en', width: 1280, inviteLabel: 'Invite members' },
+      { locale: 'zh', width: 800, inviteLabel: '邀请成员' },
+    ]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.evaluate(lang => (globalThis as any).setLang(lang), locale);
+      await page.locator('#project-action-more').click();
+      const headerInvite = page.locator('.context-menu-item').getByText(inviteLabel, { exact: true });
+      await expect(headerInvite).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath(`project-header-invite-${locale}.png`) });
+      await headerInvite.click();
+      await cancelGuide();
+
+      await row.hover();
+      await row.locator('[data-project-menu]').click();
+      const invite = page.locator('#project-row-menu [data-action="invite-members"]');
+      await expect(invite).toHaveText(inviteLabel);
+      await page.screenshot({ path: testInfo.outputPath(`project-sidebar-invite-${locale}.png`) });
+      await invite.click();
+      await cancelGuide();
+    }
   });
 
   test('creates a project and keeps it after an app relaunch', async ({ orkas }) => {
@@ -815,7 +826,7 @@ test.describe('projects', () => {
 
   }
 
-  // The project page header keeps only the title; rename and delete live in its
+  // The project page header keeps only the title; invite, rename and delete live in its
   // "⋯" menu, and "Done" stands in for the menu while the title is edited.
   test('renames from the project header menu and keeps delete behind its confirmation', async ({ orkas }, testInfo) => {
     const originalName = 'E2E Header Rename Before';
@@ -829,7 +840,7 @@ test.describe('projects', () => {
     await expect(more).toBeVisible();
     await expect(done).toBeHidden();
     await more.click();
-    await expect(page.locator('.context-menu-item')).toHaveText(['Rename', 'Delete']);
+    await expect(page.locator('.context-menu-item')).toHaveText(['Invite members', 'Rename', 'Delete']);
     await page.screenshot({ path: testInfo.outputPath('project-header-local-actions.png') });
     await page.locator('.context-menu-item', { hasText: 'Rename' }).click();
     const input = page.locator('#project-detail-title-input');

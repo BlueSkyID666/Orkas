@@ -2473,7 +2473,7 @@
   "connectors.catalog.shippo.description": "शिपमेंट, लेबल, ट्रैकिंग, रिटर्न, रिफ़ंड, माल-सूचियाँ और सीमा शुल्क डेटा प्रबंधित करें।",
   "connectors.catalog.square.description": "Square कैटलॉग, इन्वेंट्री, ग्राहक, ऑर्डर, भुगतान, रिफ़ंड, इनवॉइस, सदस्यताएँ, वफ़ादारी कार्यक्रम, गिफ़्ट कार्ड और विवादों के लिए व्यापारी का अपना Personal Access Token इस्तेमाल करें।",
   "connectors.catalog.dialpad.description": "संपर्क और कॉल ट्रांसक्रिप्ट देखें; कॉल करें और SMS भेजें।",
-  "project.menu.invite_members": "प्रोजेक्ट के सदस्यों को आमंत्रित करें",
+  "project.menu.invite_members": "सदस्यों को आमंत्रित करें",
   "project.invite_members.commercial_only": "प्रोजेक्ट के सदस्यों को आमंत्रित करने के लिए Orkas के व्यावसायिक संस्करण की सदस्यता चाहिए। साझा प्रोजेक्ट इस्तेमाल करने के लिए व्यावसायिक ऐप डाउनलोड करें और सदस्यता लें।",
   "project.invite_members.download": "व्यावसायिक संस्करण डाउनलोड करें",
   "project.invite_members.open_failed": "डाउनलोड पेज नहीं खुल सका। फिर से कोशिश करें।",

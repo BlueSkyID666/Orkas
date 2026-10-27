@@ -2473,7 +2473,7 @@
   "connectors.catalog.shippo.description": "จัดการการจัดส่ง ใบปะหน้าพัสดุ การติดตาม การคืนสินค้า การคืนเงิน บัญชีรายการสินค้า และข้อมูลศุลกากร",
   "connectors.catalog.square.description": "ใช้ Personal Access Token ของผู้ค้าเองสำหรับแค็ตตาล็อก สินค้าคงคลัง ลูกค้า คำสั่งซื้อ การชำระเงิน การคืนเงิน ใบแจ้งหนี้ การสมัครสมาชิก โปรแกรมสะสมคะแนน บัตรของขวัญ และข้อพิพาทใน Square",
   "connectors.catalog.dialpad.description": "ดูรายชื่อติดต่อและข้อความถอดเสียงการโทร โทรออกและส่ง SMS",
-  "project.menu.invite_members": "เชิญสมาชิกโครงการ",
+  "project.menu.invite_members": "เชิญสมาชิก",
   "project.invite_members.commercial_only": "การเชิญสมาชิกโครงการเป็นฟีเจอร์สำหรับสมาชิก Orkas รุ่นเชิงพาณิชย์ ดาวน์โหลดแอปเชิงพาณิชย์และสมัครสมาชิกเพื่อใช้โครงการร่วมกัน",
   "project.invite_members.download": "ดาวน์โหลดรุ่นเชิงพาณิชย์",
   "project.invite_members.open_failed": "ไม่สามารถเปิดหน้าดาวน์โหลดได้ โปรดลองอีกครั้ง",

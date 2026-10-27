@@ -2473,7 +2473,7 @@
   "connectors.catalog.shippo.description": "أدِر الشحنات والملصقات والتتبّع والمرتجعات والمبالغ المستردة وبيانات الحمولة والبيانات الجمركية.",
   "connectors.catalog.square.description": "استخدم Personal Access Token الخاص بالتاجر لكتالوج Square والمخزون والعملاء والطلبات والمدفوعات والمبالغ المستردة والفواتير والاشتراكات والولاء وبطاقات الهدايا والنزاعات.",
   "connectors.catalog.dialpad.description": "اعرض جهات الاتصال ونصوص المكالمات؛ وأجرِ المكالمات وأرسل رسائل SMS.",
-  "project.menu.invite_members": "دعوة أعضاء إلى المشروع",
+  "project.menu.invite_members": "دعوة أعضاء",
   "project.invite_members.commercial_only": "دعوة أعضاء إلى المشروع ميزة تتطلب عضوية النسخة التجارية من Orkas. نزّل التطبيق التجاري واشترك لاستخدام المشاريع المشتركة.",
   "project.invite_members.download": "تنزيل النسخة التجارية",
   "project.invite_members.open_failed": "تعذّر فتح صفحة التنزيل. حاول مرة أخرى.",
