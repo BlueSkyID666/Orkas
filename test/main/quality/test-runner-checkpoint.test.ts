@@ -262,3 +262,39 @@ it.each(['electron-log-required', 'electron-logs'])(
     expect(fs.existsSync(path.join(root, 'output', 'checkpoint-electron-snapshot.log'))).toBe(true);
   },
 );
+
+it('keeps a completed tool receipt without a terminal turn in the real interruption CLI fixture', () => {
+  const file = ts.createSourceFile('orkas.ts', fs.readFileSync(
+    path.join(pcRoot, 'test/e2e/fixtures/orkas.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
+  const factory = file.statements.find((statement): statement is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(statement) && statement.name?.text === 'fakeCodexSource');
+  if (!factory) throw new Error('Missing Codex fixture producer');
+  const code = ts.transpileModule(factory.getText(file), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-cli-interruption-producer-'));
+  roots.push(root);
+  const script = path.join(root, 'codex.cjs');
+  fs.writeFileSync(script, new Function(code + '; return fakeCodexSource();')());
+  const requests = [
+    { id: 1, method: 'initialize' },
+    { id: 2, method: 'thread/start' },
+    { id: 3, method: 'turn/start', params: { input: [{ type: 'text', text: 'E2E_CODEX_CRASH_PROCESS' }] } },
+  ];
+  const result = spawnSync(node, [script], {
+    cwd: root, encoding: 'utf8', timeout: 10_000,
+    env: { ...process.env, ORKAS_E2E_CLI_STATE: path.join(root, 'state.json') },
+    input: requests.map(request => JSON.stringify(request)).join('\n') + '\n',
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stderr).toBe('');
+  const records = result.stdout.trim().split('\n').map(line => JSON.parse(line));
+  expect(records.find(row => row.method === 'item/completed')?.params.item).toMatchObject({
+    id: 'crash-tool', type: 'commandExecution', status: 'completed',
+    aggregatedOutput: 'DURABLE_CRASH_RECEIPT', exitCode: 0,
+  });
+  expect(records.filter(row => row.method === 'turn/started')).toHaveLength(1);
+  expect(records.filter(row => row.method === 'turn/completed')).toEqual([]);
+  expect(records.filter(row => row.method === 'item/agentMessage/delta')).toEqual([]);
+});
