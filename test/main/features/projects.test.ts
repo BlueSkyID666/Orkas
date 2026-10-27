@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { drainMainRuntimeForTest } from '../../helpers/drain-main-runtime';
@@ -688,8 +689,7 @@ describe('projects › instructions', () => {
     const expectedOrder = [
       '1. The current user request',
       '2. Project instructions',
-      '3. Latest project status',
-      "4. This project's memory",
+      "3. This project's memory",
     ];
     let last = -1;
     for (const line of expectedOrder) {
@@ -697,6 +697,9 @@ describe('projects › instructions', () => {
       expect(index).toBeGreaterThan(last);
       last = index;
     }
+    // No host source ever produced a "project status" tier; the open-work
+    // snapshot is turn-ephemeral host facts, not a precedence level.
+    expect(block).not.toContain('Latest project status');
     expect(block).toContain('tell the user which values conflict and where each came from');
     expect(block).toContain('standing defaults, not immutable higher-authority policy');
     expect(block).toContain('one-turn exception without changing the saved project instructions');
@@ -798,11 +801,32 @@ describe('projects › instructions', () => {
     if (!r.ok) throw new Error('create failed');
     const over = await projects.writeProjectInstructions(
       TEST_UID, r.project.project_id, 'x'.repeat(projects.PROJECT_INSTRUCTIONS_CHAR_LIMIT + 1));
-    expect(over).toEqual({ ok: false, error: 'too_long' });
+    expect(over).toEqual({ ok: false, error: 'too_long', limit: 4000, actual: 4001 });
     // at-limit content is accepted (boundary)
     const atLimit = await projects.writeProjectInstructions(
       TEST_UID, r.project.project_id, 'x'.repeat(projects.PROJECT_INSTRUCTIONS_CHAR_LIMIT));
     expect(atLimit.ok).toBe(true);
+  });
+
+  it.each(['x', '中', '😀'])('preserves content on an over-limit %s write and accepts a corrected replacement', async (unit) => {
+    const projects = await loadProjects();
+    const created = await projects.createProject(TEST_UID, 'Length recovery');
+    if (!created.ok) throw new Error('fixture failed');
+    const pid = created.project.project_id;
+    const atLimit = unit.repeat(4000 / unit.length);
+    const overLimit = atLimit + 'x';
+    expect(await projects.writeProjectInstructions(TEST_UID, pid, 'Original')).toEqual({ ok: true });
+    for (const conditional of [false, true]) {
+      const result = conditional
+        ? await projects.writeProjectInstructionsIfUnchanged(TEST_UID, pid, 'Original', overLimit)
+        : await projects.writeProjectInstructions(TEST_UID, pid, overLimit);
+      expect(result).toEqual({ ok: false, error: 'too_long', limit: 4000, actual: 4001 });
+      expect(await projects.readProjectInstructions(TEST_UID, pid)).toMatchObject({ content: 'Original' });
+    }
+    expect(await projects.writeProjectInstructionsIfUnchanged(TEST_UID, pid, 'Original', atLimit)).toEqual({ ok: true });
+    expect(await projects.readProjectInstructions(TEST_UID, pid)).toMatchObject({ content: atLimit });
+    expect(await projects.writeProjectInstructionsIfUnchanged(TEST_UID, pid, 'Original', 'Stale')).toEqual({ ok: false, error: 'conflict' });
+    expect(await projects.readProjectInstructions(TEST_UID, pid)).toMatchObject({ content: atLimit });
   });
 
   it('formatProjectInstructionsForSystemPrompt: block for real content, empty for missing/blank', async () => {

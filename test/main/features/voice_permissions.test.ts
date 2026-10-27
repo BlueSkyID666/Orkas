@@ -35,3 +35,55 @@ describe('native composer microphone boundary', () => {
     }
   });
 });
+
+describe('voice IPC ownership across compatible channel names', () => {
+  it.each(['voice', 'voiceInput'])('confines %s tickets, status and permission prompts to the main frame', async (prefix) => {
+    const source = readFileSync(path.join(__dirname, '../../../src/main/ipc/index.ts'), 'utf8');
+    const tree = ts.createSourceFile('ipc.ts', source, ts.ScriptTarget.Latest, true);
+    let register = '';
+    const routes: string[] = [];
+    function visit(node: ts.Node) {
+      if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)
+        && node.expression.expression.getText(tree) === 'ipcMain.handle'
+        && node.expression.arguments[0]?.getText(tree) === "'orkas.invoke'") register = node.getText(tree);
+      if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'invokeHandlers'
+        && node.initializer && ts.isObjectLiteralExpression(node.initializer)) {
+        for (const property of node.initializer.properties) {
+          if (ts.isPropertyAssignment(property) && /^['"]voice(?:Input)?\./.test(property.name.getText(tree))) routes.push(property.getText(tree));
+        }
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(tree);
+    let invoke!: (event: unknown, request: unknown) => Promise<unknown>;
+    let calls = 0;
+    const main = { mainFrame: {} }, preview = { mainFrame: {} }, foreign = { mainFrame: {} };
+    const context = {
+      ipcMain: { handle: (_channel: string, callback: typeof invoke) => { invoke = callback; } },
+      voiceInput: {
+        getVoiceStatus: () => { calls++; return { configured: true }; },
+        createVoiceSession: () => { calls++; return { url: 'wss://example.invalid/test-ticket' }; },
+        ensureMicrophoneAccess: () => { calls++; return { granted: true }; },
+      },
+      isTrustedIpcSender: (sender: unknown) => sender === main || sender === preview,
+      previewWindows: { isPreviewContents: (sender: unknown) => sender === preview },
+      parseInvokeEnvelope: (request: unknown) => request,
+      resolveContext: async () => ({}), log: { warn() {} },
+    };
+    vm.runInNewContext(ts.transpileModule(`const invokeHandlers = {${routes.join(',')}};\n${register}`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText, context);
+    for (const operation of ['status', 'createSession', 'ensureMicrophoneAccess']) {
+      const request = { channel: `${prefix}.${operation}`, payload: {} };
+      const previousCalls = calls;
+      for (const event of [
+        { sender: main, senderFrame: {} },
+        { sender: preview, senderFrame: preview.mainFrame },
+        { sender: foreign, senderFrame: foreign.mainFrame },
+      ]) expect(await invoke(event, request)).toMatchObject({ ok: false, code: 'E_IPC_SENDER' });
+      expect(calls).toBe(previousCalls);
+      expect(await invoke({ sender: main, senderFrame: main.mainFrame }, request)).toMatchObject({ ok: true });
+      expect(calls).toBe(previousCalls + 1);
+    }
+  });
+});

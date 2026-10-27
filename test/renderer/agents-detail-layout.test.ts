@@ -176,7 +176,7 @@ describe('external CLI Agent detail layout', () => {
     expect(settings).toContain('_mergeAgentIntoCache(saved.agent)');
     expect(settings).not.toContain('_agentsCache = null');
   });
-  it.each([false, true])('retains upgrade feedback and current discovery across overlapping detail refreshes (older first: %s)', async olderFirst => {
+  it.each([['success', false], ['success', true], ['up_to_date', false], ['up_to_date', true]] as const)('retains %s upgrade feedback across overlapping detail refreshes (older first: %s)', async (state, olderFirst) => {
     const source = fs.readFileSync(path.join(rendererRoot, 'modules/agents.js'), 'utf8');
     const ast = ts.createSourceFile('agents.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
     const entry = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === '_renderAgentDetailRuntime');
@@ -206,7 +206,7 @@ describe('external CLI Agent detail layout', () => {
     }
     const slot = new Element(), section = new Element(), feedback = new Element();
     slot.dataset.runtimeKey = 'one::claude';
-    feedback.className = 'local-cli-upgrade-control'; feedback.dataset.state = 'success';
+    feedback.className = 'local-cli-upgrade-control'; feedback.dataset.state = state;
     slot.appendChild(feedback);
     const resolveDiscovery: Array<(entries: unknown[]) => void> = [];
     const context = vm.createContext({
@@ -229,7 +229,7 @@ describe('external CLI Agent detail layout', () => {
       await runs[index];
     }
     expect(slot.querySelector('.local-cli-upgrade-control')).toBe(feedback);
-    expect(slot.querySelector('.local-cli-upgrade-control')?.dataset.state).toBe('success');
+    expect(slot.querySelector('.local-cli-upgrade-control')?.dataset.state).toBe(state);
     expect(slot.querySelector('.agents-detail-runtime-select')?.options[0].label).toContain('2.1.113');
   });
 
