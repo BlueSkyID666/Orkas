@@ -369,8 +369,16 @@ function _openComposerModelVersionMenu(owner, versionMenu, { focusFirst = false 
 }
 
 async function _selectComposerModel(entry) {
-  if (_composerModelBusy || !entry || !entry.entryId) return;
+  if (_composerModelBusy || !entry || !entry.entryId || entry.selectable === false) return;
   const requestedModel = String(entry.model || '').trim();
+  const activeEntry = _composerModelEntries.find((candidate) => (
+    candidate && candidate.selectable !== false
+  ));
+  if (
+    activeEntry
+    && activeEntry.entryId === entry.entryId
+    && (!requestedModel || requestedModel === String(activeEntry.model || '').trim())
+  ) return;
   _composerModelBusy = true;
   const previousEntries = _composerModelEntries.slice();
   try {
