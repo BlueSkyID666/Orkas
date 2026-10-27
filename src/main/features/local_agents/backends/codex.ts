@@ -41,7 +41,6 @@ import {
   type LocalCliPermissionDecision,
   StderrTail,
   spawnCli,
-  killProcessTree,
   reapCliAfterProtocolTerminal,
   armKillWatchdog,
   LineSplitter,
@@ -1283,13 +1282,10 @@ export const codexBackend: LocalBackend = {
       // A JSON-RPC setup failure resolves before the normal close-driven
       // lifecycle. Explicitly terminate the detached process group so a CLI
       // that keeps its event loop alive cannot outlive the failed dispatch.
-      // A short hard-kill fallback also bounds teardown of an uncooperative
-      // process. Submission, not a missing acknowledgement, decides replay safety.
-      const hardKill = setTimeout(() => killProcessTree(child, 'SIGKILL'), 250);
-      if (typeof hardKill.unref === 'function') hardKill.unref();
-      child.once('close', () => clearTimeout(hardKill));
-      try { child.stdin.end(); } catch { /* already closed */ }
-      killProcessTree(child, 'SIGTERM');
+      // Use the existing terminal cleanup owner: on Windows EOF must wait
+      // until taskkill has traversed the live parent. POSIX retains the short
+      // escalation. Submission, not a missing acknowledgement, decides replay safety.
+      reapCliAfterProtocolTerminal(child, 250);
       finish('failed', {
         error,
         stderrTail: tail.toString(),

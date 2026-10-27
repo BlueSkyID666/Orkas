@@ -851,8 +851,119 @@ describe('official local CLI connector runtime', () => {
       bundledRuntime.node = previousNode;
       vi.unstubAllEnvs();
       fs.rmSync(runtimeDir, { recursive: true, force: true });
+      // Remove the directory link itself before recursive Windows cleanup;
+      // the selected runtime belongs to the host, outside this fixture.
+      fs.unlinkSync(nodeDir);
       fs.rmSync(fixture, { recursive: true, force: true });
     }
+  });
+
+  it('records one private-data-free install receipt for coalesced failures and permits a clean retry', async () => {
+    const entry = findCatalogEntry('wecom')!;
+    const uid = 'install-failure-receipt';
+    const runtimeDir = localCliRuntimeDir(uid, entry.id);
+    diagnostics.warn.mockClear();
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const runner = vi.fn(async () => {
+      await pending;
+      return { exitCode: 127, stderr: 'private account token and /private/installer/path',
+        spawnCode: 'private-untrusted-code', signal: 'private-untrusted-signal' };
+    });
+    try {
+      const first = installLocalCli(uid, entry, { runHelper: runner });
+      const duplicate = installLocalCli(uid, entry, { runHelper: runner });
+      expect(duplicate).toBe(first);
+      release();
+      await expect(first).rejects.toMatchObject({ code: 'local_cli_install_failed' });
+      expect(runner).toHaveBeenCalledOnce();
+      expect(diagnostics.warn).toHaveBeenCalledExactlyOnceWith('Official CLI installation failed', {
+        provider: 'wecom', phase: 'execute', error_code: 'local_cli_install_failed', exit_code: 127,
+      });
+      expect(localCliInstallStatus(uid, entry).installed).toBe(false);
+      await expect(installLocalCli(uid, entry, { runHelper: async () => {
+        seedInstalled(uid, entry);
+        return { exitCode: 0, stderr: '' };
+      } })).resolves.toMatchObject({ installed: true });
+      expect(diagnostics.warn).toHaveBeenCalledOnce();
+    } finally { fs.rmSync(runtimeDir, { recursive: true, force: true }); }
+  });
+
+  it('distinguishes an installation postcheck failure from a successful helper exit', async () => {
+    const entry = findCatalogEntry('wecom')!;
+    const uid = 'install-postcheck-receipt';
+    diagnostics.warn.mockClear();
+    try {
+      await expect(installLocalCli(uid, entry, { runHelper: async () => ({ exitCode: 0, stderr: '' }) }))
+        .rejects.toMatchObject({ code: 'local_cli_install_failed' });
+      expect(diagnostics.warn).toHaveBeenCalledExactlyOnceWith('Official CLI installation failed', {
+        provider: 'wecom', phase: 'verify', error_code: 'local_cli_install_failed', exit_code: 0,
+      });
+      expect(localCliInstallStatus(uid, entry).installed).toBe(false);
+    } finally { fs.rmSync(localCliRuntimeDir(uid, entry.id), { recursive: true, force: true }); }
+  });
+
+  it.each(['ENOENT', 'private-untrusted-code'])('keeps only a known OS spawn code for %s', async code => {
+    const entry = findCatalogEntry('wecom')!;
+    const uid = 'install-spawn-receipt';
+    diagnostics.warn.mockClear();
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit('error', Object.assign(new Error('private spawn path'), { code })));
+      return child as ReturnType<typeof spawn>;
+    });
+    try {
+      await expect(installLocalCli(uid, entry)).rejects.toMatchObject({ code: 'local_cli_install_failed' });
+      expect(diagnostics.warn).toHaveBeenCalledExactlyOnceWith('Official CLI installation failed', {
+        provider: 'wecom', phase: 'execute', error_code: 'local_cli_install_failed', exit_code: null,
+        ...(code === 'ENOENT' ? { system_code: 'ENOENT' } : {}),
+      });
+      expect(localCliInstallStatus(uid, entry).installed).toBe(false);
+    } finally { fs.rmSync(localCliRuntimeDir(uid, entry.id), { recursive: true, force: true }); }
+  });
+
+  it.each(['SIGTERM', 'private-untrusted-signal'])('retains only a known termination signal for %s', async signal => {
+    const entry = findCatalogEntry('wecom')!;
+    const uid = 'install-signal-receipt';
+    diagnostics.warn.mockClear();
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit('close', null, signal));
+      return child as ReturnType<typeof spawn>;
+    });
+    try {
+      await expect(installLocalCli(uid, entry)).rejects.toMatchObject({ code: 'local_cli_install_failed' });
+      expect(diagnostics.warn).toHaveBeenCalledExactlyOnceWith('Official CLI installation failed', {
+        provider: 'wecom', phase: 'execute', error_code: 'local_cli_install_failed', exit_code: null,
+        ...(signal === 'SIGTERM' ? { signal } : {}),
+      });
+      expect(localCliInstallStatus(uid, entry).installed).toBe(false);
+    } finally { fs.rmSync(localCliRuntimeDir(uid, entry.id), { recursive: true, force: true }); }
+  });
+
+  it('records an invalid cache layout without starting an installer or deleting existing credentials', async () => {
+    const entry = findCatalogEntry('wecom')!;
+    const uid = 'install-cleanup-receipt';
+    const runtime = localCliRuntimeDir(uid, entry.id);
+    fs.mkdirSync(runtime, { recursive: true });
+    const credentials = path.join(runtime, 'credentials.json');
+    fs.writeFileSync(credentials, 'preserve-existing-credentials');
+    // An invalid marker directory cannot be removed by the file-only cleanup.
+    // Unlike ENOTDIR under force=true, this is stable across Node versions.
+    const marker = path.join(runtime, '.orkas-cli-integrity.json');
+    fs.mkdirSync(marker);
+    fs.writeFileSync(path.join(marker, 'preserve'), 'invalid-marker-layout');
+    const runner = vi.fn();
+    diagnostics.warn.mockClear();
+    try {
+      await expect(installLocalCli(uid, entry, { runHelper: runner }))
+        .rejects.toMatchObject({ code: 'local_cli_install_failed' });
+      expect(runner).not.toHaveBeenCalled();
+      expect(diagnostics.warn).toHaveBeenCalledExactlyOnceWith('Official CLI installation failed', {
+        provider: 'wecom', phase: 'cache_cleanup', error_code: 'local_cli_install_failed',
+      });
+      expect(fs.readFileSync(credentials, 'utf8')).toBe('preserve-existing-credentials');
+    } finally { fs.rmSync(runtime, { recursive: true, force: true }); }
   });
 
   it('maps registry verification failures to a stable renderer-safe install code', async () => {

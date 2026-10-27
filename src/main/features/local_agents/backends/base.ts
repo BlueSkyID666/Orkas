@@ -501,7 +501,9 @@ function terminateCliTree(child: ChildProcessWithoutNullStreams, graceMs: number
   const terminate = () => {
     if (closed) { onComplete?.(); return; }
     killProcessTree(child, 'SIGTERM', { onComplete });
-    if (!closed) {
+    // taskkill /f is already forceful and owns its bounded fallback. A second
+    // Windows taskkill can race the first and target an already-exited root.
+    if (!closed && (process.platform !== 'win32' || !child.pid)) {
       hardKill = setTimeout(() => {
         hardKill = undefined;
         killProcessTree(child, 'SIGKILL');

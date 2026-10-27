@@ -133,7 +133,9 @@ process.stdin.resume();`);
     await tool("process_session").execute({ action: "write", session_id: sessionId, chars: "listen\n" }, ctx);
     await waitForProcessRead(owner, sessionId, 0, value => value.output.includes("LISTENING"));
     expect(await request()).toEqual({ status: 200, body: "local-service-ready" });
-    await tool("process_session").execute({ action: "stop", session_id: sessionId }, ctx);
+    const stops = await Promise.all([0, 1].map(() =>
+      tool("process_session").execute({ action: "stop", session_id: sessionId }, ctx)));
+    expect(stops.every(result => !result.isError)).toBe(true);
     expect(await request()).toEqual({ error: "ECONNREFUSED" });
   });
 
