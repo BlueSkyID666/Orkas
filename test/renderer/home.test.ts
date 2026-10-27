@@ -450,6 +450,46 @@ describe('Commander home states', () => {
   });
 });
 
+describe('Commander home keyboard continuity during refresh', () => {
+  it.each(['homeToggle', 'homeAction', 'homeTodo', 'homeCid'])('keeps the focused %s control usable when new work arrives', async (key) => {
+    const h = loadHome();
+    const document = h.context.document;
+    const oldButton = element({ dataset: { [key]: 'selected', homePid: 'p1' } });
+    const replacement = element({ dataset: { [key]: 'selected', homePid: 'p1' },
+      focus: vi.fn(() => { document.activeElement = replacement; }) });
+    const unrelated = element({ dataset: { [key]: 'other', homePid: 'p1' } });
+    const otherProject = element({ dataset: { [key]: 'selected', homePid: 'p2' } });
+    const host = h.els['home-groups'];
+    host.contains = (node: unknown) => node === oldButton;
+    host.querySelectorAll = () => [unrelated, otherProject, replacement];
+    document.activeElement = oldButton;
+    Object.defineProperty(host, 'innerHTML', { set() { document.activeElement = null; } });
+
+    h.context.homeRefresh();
+    h.timers.find((timer) => timer.ms === 500)!.fn();
+    await h.settle();
+
+    expect(document.activeElement).toBe(replacement);
+    expect(replacement.focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(unrelated.focusCount).toBe(0);
+    expect(otherProject.focusCount).toBe(0);
+  });
+
+  it.each(['outside', 'removed'])('does not move focus to another control when the focused control is %s', async (location) => {
+    const h = loadHome();
+    const original = element({ dataset: { homeToggle: 'todos' } });
+    const other = element({ dataset: { homeToggle: 'tasks' } });
+    h.context.document.activeElement = original;
+    h.els['home-groups'].contains = () => location !== 'outside';
+    h.els['home-groups'].querySelectorAll = () => [other];
+    h.context.homeRefresh();
+    h.timers.find((timer) => timer.ms === 500)!.fn();
+    await h.settle();
+    expect(other.focusCount).toBe(0);
+    expect(original.focusCount).toBe(0);
+  });
+});
+
 describe('Commander home Connectors link', () => {
   it('opens Connectors directly without a chooser or starting setup', async () => {
     const h = loadHome();

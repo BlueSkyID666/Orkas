@@ -367,7 +367,22 @@ function _homeRender() {
   // Groups keep this order; one without items is left out entirely.
   const sections = ['todos', 'automations', 'tasks'].filter((section) => counts[section] > 0);
   const host = document.getElementById('home-groups');
-  if (host) host.innerHTML = sections.map(_homeSectionHtml).join('');
+  if (host) {
+    // Background refreshes can arrive between focusing a control and pressing
+    // Enter. Preserve its identity across replacement without moving the view.
+    const active = document.activeElement;
+    const focusKey = active && host.contains(active)
+      ? ['homeToggle', 'homeAction', 'homeTodo', 'homeCid'].find(key => active.dataset[key])
+      : null;
+    const focusValue = focusKey ? active.dataset[focusKey] : '';
+    const focusProject = focusKey ? active.dataset.homePid : undefined;
+    host.innerHTML = sections.map(_homeSectionHtml).join('');
+    if (focusKey) {
+      const replacement = Array.from(host.querySelectorAll('button')).find(button =>
+        button.dataset[focusKey] === focusValue && button.dataset.homePid === focusProject);
+      replacement?.focus({ preventScroll: true });
+    }
+  }
   _homeApplyState(sections.length ? 'populated' : 'empty');
 }
 
