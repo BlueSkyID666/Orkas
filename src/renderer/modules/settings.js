@@ -59,6 +59,9 @@ let _settingsState = {
   taskNotificationsToggleEpoch: 0,
   taskNotificationPermissionRefreshTimer: null,
   taskNotificationPermissionLogKey: '',
+  metacognition: null,
+  metacognitionToggleEpoch: 0,
+  localExecModeEpoch: 0,
   clientConfigBound: false,
   recycleBound: false,
   orkasApiCredential: null,
@@ -735,9 +738,9 @@ function _settingsBindRecycleBinOnce() {
 const _LOCALEXEC_MODES = ['workspace_approval', 'all_files_approval', 'all_files_auto'];
 
 async function _settingsRefreshLocalExec() {
-  const epoch = _settingsState.localExecToggleEpoch;
+  const epoch = _settingsState.localExecModeEpoch;
   const res = await window.orkas.invoke('permissions.getLocalExec');
-  if (epoch !== _settingsState.localExecToggleEpoch) return;
+  if (epoch !== _settingsState.localExecModeEpoch) return;
   const mode = (res && res.ok && _LOCALEXEC_MODES.includes(res.mode)) ? res.mode : 'all_files_approval';
   _settingsState.localExec = { mode };
   _settingsRenderLocalExec();
