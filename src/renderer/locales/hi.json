@@ -584,6 +584,7 @@
   "apps.empty": "कोई ऐप नहीं",
   "apps.open_hint": "Orkas में खोलें",
   "apps.open_failed": "ऐप नहीं खुल सका",
+  "apps.publish_action": "प्रकाशित करें",
   "apps.edit": "संपादित करें",
   "apps.edit_conv_title": "\"{name}\" संपादित करें",
   "apps.edit_seed": "इंटरैक्टिव ऐप \"{name}\" में बदलाव करें। स्रोत: संलग्न \"{file}\":",

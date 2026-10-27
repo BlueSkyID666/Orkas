@@ -53,6 +53,9 @@ describe('My Apps list refresh', () => {
 describe('My Apps publication entry', () => {
   it.each(['local', 'web', 'cloud'])('keeps a %s app and its draft when publication guidance is cancelled', async appType => {
     const h = await openPanel(apps([{ id: 'app-weather', title: 'Weather', appType, savedAt }]));
+    h.card('app-weather')!.querySelector('[data-app-more]')!.click();
+    expect(h.$('.app-row-menu [data-action="publish"]')!.textContent).toBe('发布');
+    h.press('Escape');
     await h.chooseMenuAction('app-weather', 'publish');
     const [dialog] = h.openDialogs();
     expect(h.dialogText(dialog)).toBe(h.context.t('apps.commercial_required'));

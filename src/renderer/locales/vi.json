@@ -584,6 +584,7 @@
   "apps.empty": "Không có ứng dụng",
   "apps.open_hint": "Mở trong Orkas",
   "apps.open_failed": "Không thể mở ứng dụng",
+  "apps.publish_action": "Xuất bản",
   "apps.edit": "Chỉnh sửa",
   "apps.edit_conv_title": "Chỉnh sửa \"{name}\"",
   "apps.edit_seed": "Chỉnh sửa ứng dụng tương tác \"{name}\". Nguồn: tệp đính kèm \"{file}\":",

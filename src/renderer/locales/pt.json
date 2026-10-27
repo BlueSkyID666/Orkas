@@ -584,6 +584,7 @@
   "apps.empty": "Nenhum aplicativo",
   "apps.open_hint": "Aberto em Orkas",
   "apps.open_failed": "Não foi possível abrir o aplicativo",
+  "apps.publish_action": "Publicar",
   "apps.edit": "Editar",
   "apps.edit_conv_title": "Editar \"{name}\"",
   "apps.edit_seed": "Modifique o app interativo \"{name}\". Origem: \"{file}\" anexado:",

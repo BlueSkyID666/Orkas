@@ -584,6 +584,7 @@
   "apps.empty": "暫無應用程式",
   "apps.open_hint": "在 Orkas 中開啟",
   "apps.open_failed": "無法開啟應用程式",
+  "apps.publish_action": "發布",
   "apps.edit": "編輯",
   "apps.edit_conv_title": "編輯「{name}」",
   "apps.edit_seed": "請修改互動應用程式「{name}」，原始碼見附件「{file}」：",

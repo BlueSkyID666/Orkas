@@ -888,6 +888,9 @@ test('publication guidance preserves the app and direct publication refuses with
     const card = page.locator(`.app-card[data-app-id="${saved.id}"]`);
     await card.hover();
     await card.locator('[data-app-more]').click();
+    await expect(page.locator('.app-row-menu [data-action="publish"]'))
+      .toHaveText(language === 'zh' ? '发布' : 'Publish');
+    await page.locator('.app-row-menu').screenshot({path:testInfo.outputPath(`publication-menu-${language}.png`)});
     await page.locator('.app-row-menu [data-action="publish"]').click();
     const dialog = page.locator('.ui-dialog-overlay.open');
     await expect(dialog).toContainText(language === 'zh' ? '发布' : 'publish', {ignoreCase:true});

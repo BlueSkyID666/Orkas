@@ -584,6 +584,7 @@
   "apps.empty": "Tidak ada aplikasi",
   "apps.open_hint": "Buka di Orkas",
   "apps.open_failed": "Tidak dapat membuka aplikasi",
+  "apps.publish_action": "Terbitkan",
   "apps.edit": "Edit",
   "apps.edit_conv_title": "Edit \"{name}\"",
   "apps.edit_seed": "Ubah aplikasi interaktif \"{name}\". Sumber: terlampir \"{file}\":",
