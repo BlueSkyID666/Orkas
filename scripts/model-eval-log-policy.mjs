@@ -204,7 +204,9 @@ export function createModelEvalLogCollector(phase, { maxLineChars = MAX_PARTIAL_
       // application errors that merely mention deprecation.
       const nodeDeprecation = level === "error" && source === "console"
         && /^\(node:\d+\) \[DEP\d{4}\] DeprecationWarning: /.test(message);
-      if (nodeDeprecation) level = "warn";
+      const nodeListenerWarning = level === "error" && source === "console"
+        && /^\(node:\d+\) MaxListenersExceededWarning: /.test(message);
+      if (nodeDeprecation || nodeListenerWarning) level = "warn";
       state.classificationCounts.runtime += 1;
       state.levelCounts[level] += 1;
       state.sourceCounts[source] = (state.sourceCounts[source] || 0) + 1;
@@ -214,6 +216,7 @@ export function createModelEvalLogCollector(phase, { maxLineChars = MAX_PARTIAL_
         addFinding(
           "warning",
           nodeDeprecation ? "node-deprecation-warning"
+            : nodeListenerWarning ? "node-runtime-warning"
             : /tool definition description exceeds soft budget/i.test(message)
             ? "tool-definition-soft-budget"
             : "runtime-warning",
