@@ -528,10 +528,12 @@ export function deriveDoubaoResourceId(voice: string): string {
 
 /** Concatenate the base64 audio chunks from a Doubao V3 `/unidirectional`
  *  NDJSON response. Data events are `{code:0,data:"<base64>"}`; the stream ends
- *  with `{code:20000000}`; any other code is an error event. Pure → unit-tested. */
+ *  with `{code:20000000}`; clean EOF alone does not prove synthesis completed.
+ *  Any other code is an error event. Pure → unit-tested. */
 export function parseDoubaoV3Ndjson(raw: string): { ok: true; audio: Buffer } | { ok: false; message: string } {
   const chunks: Buffer[] = [];
   let error = '';
+  let sawDone = false;
   for (const line of raw.split('\n')) {
     let s = line.trim();
     if (!s) continue;
@@ -544,12 +546,15 @@ export function parseDoubaoV3Ndjson(raw: string): { ok: true; audio: Buffer } | 
       : (typeof obj.code === 'string' && /^-?\d+$/.test(obj.code.trim()) ? Number(obj.code) : undefined);
     if (code === 0 && typeof obj.data === 'string' && obj.data) {
       chunks.push(Buffer.from(obj.data, 'base64'));
+    } else if (code === DOUBAO_V3_DONE_CODE) {
+      sawDone = true;
     } else if (code !== undefined && code !== 0 && code !== DOUBAO_V3_DONE_CODE) {
       error = obj.message || obj.msg || `code ${code}`;
     }
   }
   if (error) return { ok: false, message: `Doubao TTS failed: ${error}` };
   if (!chunks.length) return { ok: false, message: 'Doubao TTS returned no audio.' };
+  if (!sawDone) return { ok: false, message: 'Doubao TTS stream ended before completion.' };
   return { ok: true, audio: Buffer.concat(chunks) };
 }
 
@@ -647,7 +652,7 @@ class DoubaoTtsBackend implements TtsBackend {
     if (parsed.ok === false) {
       return sentFailure(
         'E_TTS_API_ERROR',
-        'Doubao TTS returned an invalid or rejected audio stream.',
+        'Doubao speech generation failed or did not complete. No audio file was saved; the provider may already have charged for this request.',
       );
     }
     const buf = format === 'wav' ? wrapPcm16MonoWav(parsed.audio) : parsed.audio;

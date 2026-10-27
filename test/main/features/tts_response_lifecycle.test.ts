@@ -150,6 +150,32 @@ describe.each(['custom', 'elevenlabs', 'doubao', 'orkas-api'])('%s response life
     expect(fetch).toHaveBeenCalledOnce();
   });
 
+  if (provider === 'doubao') {
+    it('rejects a real HTTP 200 response closed before synthesis completion without overwriting or replaying', async () => {
+      writeFileSync(output(), 'prior complete narration');
+      let requests = 0;
+      const server = createServer((_request, response) => {
+        requests++;
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ code: 0, data: Buffer.from('partial').toString('base64') }));
+      });
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      state.baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      try {
+        await expect(request()).resolves.toMatchObject({
+          ok: false, errorCode: 'E_TTS_API_ERROR', requestDisposition: 'sent',
+          chargeStatus: 'unknown', retryPolicy: 'unknown',
+        });
+        expect(requests).toBe(1);
+        expect(readFileSync(output(), 'utf8')).toBe('prior complete narration');
+        expect(state.probe).not.toHaveBeenCalled();
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
+    });
+  }
+
   it.each([200])('returns sent/unknown after a body disconnect (HTTP %s) without overwriting or replaying', async status => {
     writeFileSync(output(), 'prior narration');
     const privateError = 'connection failed https://private.example/voice?token=fixture-secret';

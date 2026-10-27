@@ -54,6 +54,17 @@ exactly one provider request. `test/e2e/professional_agents_e2e_smoke.spec.ts`
 checks selection, prompt/installed Skill execution and a timed WAV export.
 These controlled responses do not measure model quality or live service health.
 
+Direct Doubao V3 synthesis require a parsed `code: 20000000`
+completion event plus audio and no error event. Clean HTTP EOF without that
+event is an incomplete synthesis, including on previously tolerated gateways.
+`tts_doubao.test.ts` covers missing, truncated and look-alike completion frames,
+numeric/string codes, SSE/CRLF and final-line delimiters, and errors before or
+after completion. `tts_doubao_lifecycle.test.ts` and the real local HTTP case in
+`tts_response_lifecycle.test.ts` verify that incomplete responses do not create
+or overwrite audio, do not trigger duration probing or a second synthesis,
+and retain sent/unknown-charge/unknown-retry metadata. Existing cancellation,
+deadline and fragmented-completion cases remain required.
+
 ## Text, voice and file journeys
 
 | User scenario | Independent outcome |
