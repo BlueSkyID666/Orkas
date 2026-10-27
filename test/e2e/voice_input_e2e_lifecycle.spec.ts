@@ -64,12 +64,14 @@ test.describe('API-key voice input', () => {
     const server = createServer();
     const cleanup = ownFixtureServer(server);
     cleanups.push(cleanup);
+    let sendReady: (() => void) | undefined;
+    let sendResult: (() => void) | undefined;
     server.on('upgrade', (request, socket) => {
       const key = String(request.headers['sec-websocket-key']);
       const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
       socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
       const ready = Buffer.from('{"event":"ready"}');
-      socket.write(Buffer.concat([Buffer.from([0x81, ready.length]), ready]));
+      sendReady = () => socket.write(Buffer.concat([Buffer.from([0x81, ready.length]), ready]));
       let buffer = Buffer.alloc(0);
       socket.on('data', chunk => {
         buffer = Buffer.concat([buffer, chunk]);
@@ -84,7 +86,7 @@ test.describe('API-key voice input', () => {
           if (opcode === 8) { socket.end(Buffer.from([0x88, 0])); return; }
           if (opcode !== 1 || payload.toString() !== '__END__') continue;
           const result = Buffer.from(JSON.stringify({ is_last_package: true, payload_msg: { result: { text: 'E2E dictated note' } } }));
-          socket.write(Buffer.concat([Buffer.from([0x81, result.length]), result]));
+          sendResult = () => socket.write(Buffer.concat([Buffer.from([0x81, result.length]), result]));
         }
       });
     });
@@ -104,13 +106,33 @@ test.describe('API-key voice input', () => {
     });
     await page.locator('#new-chat-mic-btn').click();
     await page.locator('.ui-dialog-overlay.open [data-act="ok"]').click();
-    await expect(page.locator('#new-chat-mic-btn')).toHaveAttribute('data-voice-phase', 'recording');
+    const mic = page.locator('#new-chat-mic-btn');
+    const expectActiveIcon = async () => {
+      await expect(mic).toHaveCSS('color', 'rgb(220, 38, 38)');
+      await expect(mic).toHaveCSS('animation-name', 'chat-mic-pulse');
+      await expect(page.locator('.chat-mic-status:visible')).toHaveCount(0);
+    };
+    await expect(mic).toHaveAttribute('data-voice-phase', 'connecting');
+    await expectActiveIcon();
+    await page.screenshot({ path: testInfo.outputPath('voice-connecting-en.png') });
+    await expect.poll(() => !!sendReady).toBe(true);
+    sendReady!();
+    await expect(mic).toHaveAttribute('data-voice-phase', 'recording');
+    await expectActiveIcon();
     await page.screenshot({ path: testInfo.outputPath('voice-recording-en.png') });
     await page.setViewportSize({ width: 760, height: 600 });
     await page.evaluate(async () => { await (window as any).setLang('zh'); });
-    await expect(page.locator('.chat-mic-status:visible')).toContainText('正在录音');
+    await expectActiveIcon();
+    await expect(mic).toHaveAttribute('aria-label', '停止录音');
     await page.screenshot({ path: testInfo.outputPath('voice-recording-zh-narrow.png') });
     await page.locator('#new-chat-mic-btn').click();
+    await expect(mic).toHaveAttribute('data-voice-phase', 'finalizing');
+    await expect(mic).toHaveCSS('color', 'rgb(148, 163, 184)');
+    await expect(mic).toHaveCSS('animation-name', 'none');
+    await expect(page.locator('.chat-mic-status:visible')).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath('voice-finalizing-zh-narrow.png') });
+    await expect.poll(() => !!sendResult).toBe(true);
+    sendResult!();
     await expectComposerText(page.locator('#new-chat-input'), 'Draft: E2E dictated note');
     await expect(page.locator('#new-chat-mic-btn')).toHaveAttribute('data-voice-phase', 'idle');
     expect(await page.evaluate(() => (window as any).__voiceStops)).toBe(1);

@@ -5,8 +5,11 @@ import vm from 'node:vm';
 
 function element() {
   const events: Record<string, Function> = {};
+  const classes = new Set<string>();
   return { id: 'new-chat-mic-btn', value: 'Draft:', dataset: {} as any, title: '', hidden: false,
-    classList: { toggle: vi.fn() }, setAttribute: vi.fn(), getClientRects: () => [1],
+    classList: { toggle: (name: string, enabled: boolean) => enabled ? classes.add(name) : classes.delete(name),
+      contains: (name: string) => classes.has(name) },
+    parentNode: { insertBefore: vi.fn() }, setAttribute: vi.fn(), getClientRects: () => [1],
     addEventListener: (name: string, fn: Function) => { events[name] = fn; },
     dispatch: (name: string) => events[name]?.(), focus: vi.fn() };
 }
@@ -38,7 +41,7 @@ function load(overrides: Record<string, any> = {}) {
   }
   const context: any = {
     window: { orkas: { invoke }, AudioContext, addEventListener: vi.fn(), localStorage: { getItem: () => null, setItem: vi.fn() } },
-    document: { addEventListener: vi.fn(), getElementById: () => input, hidden: false },
+    document: { addEventListener: vi.fn(), getElementById: () => input, createElement: () => element(), hidden: false },
     navigator: { mediaDevices: { getUserMedia } }, WebSocket: Socket,
     composerText: () => input.value, composerSelection: () => ({ start: input.value.length }),
     composerInsertion: () => ({ valid: () => true, replace: (text: string) => { input.value = 'Draft:' + text; return true; }, dispose() {} }),
@@ -58,6 +61,27 @@ const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve()
 afterEach(() => vi.useRealTimers());
 
 describe('voice input user journey', () => {
+  it('uses the Orkas icon-only active and finishing states throughout dictation', async () => {
+    vi.useFakeTimers();
+    const h = load();
+    const expectState = (phase: string, recording: boolean, busy: boolean) => {
+      expect(h.button.dataset.voicePhase).toBe(phase);
+      expect(h.button.classList.contains('is-recording')).toBe(recording);
+      expect(h.button.classList.contains('is-busy')).toBe(busy);
+      expect(h.button.parentNode.insertBefore).not.toHaveBeenCalled();
+    };
+    expectState('idle', false, false);
+    await h.button.dispatch('click'); await flush();
+    expectState('connecting', true, false);
+    expect(h.button.title).toBe('chat.mic_stop_title');
+    h.socket().open(); await flush();
+    expectState('recording', true, false);
+    await h.button.dispatch('click'); await flush();
+    expectState('finalizing', false, true);
+    h.socket().result('spoken note', true);
+    expectState('idle', false, false);
+    expect(h.button.title).toBe('chat.mic_title');
+  });
   it('guides a missing key before requesting the microphone', async () => {
     const h = load();
     h.invoke.mockResolvedValue({ ok: true, configured: false } as any);
@@ -183,6 +207,8 @@ describe('voice input user journey', () => {
     expect(h.track.stop).toHaveBeenCalledTimes(1);
     expect(h.socket()).toBeUndefined();
     expect(h.button.dataset.voicePhase).toBe('idle');
+    expect(h.button.classList.contains('is-recording')).toBe(false);
+    expect(h.button.classList.contains('is-busy')).toBe(false);
   });
   it('does not resurrect capture when stopped during worklet initialization', async () => {
     vi.useFakeTimers();

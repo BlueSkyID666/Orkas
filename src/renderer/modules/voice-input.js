@@ -409,25 +409,14 @@
     button.dataset.voiceBound = '1';
     let attempt = null;
     let phase = 'idle';
-    const phaseText = document.createElement ? document.createElement('span') : null;
-    if (phaseText) {
-      phaseText.className = 'chat-mic-status'; phaseText.setAttribute('role', 'status');
-      phaseText.setAttribute('aria-live', 'polite'); phaseText.hidden = true;
-      button.parentNode?.insertBefore(phaseText, button);
-    }
     function paint(next) {
       phase = next;
       button.dataset.voicePhase = phase;
-      button.classList.toggle('is-recording', phase === 'recording');
-      button.classList.toggle('is-busy', phase === 'connecting' || phase === 'finalizing');
+      button.classList.toggle('is-recording', phase === 'recording' || phase === 'connecting');
+      button.classList.toggle('is-busy', phase === 'finalizing');
       button.title = tr(phase === 'idle' ? 'title' : phase === 'finalizing' ? 'finalizing' : 'stop_title');
       button.setAttribute('aria-label', button.title);
       button.setAttribute('aria-pressed', String(phase === 'recording'));
-      if (phaseText) {
-        phaseText.hidden = phase === 'idle';
-        phaseText.textContent = phase === 'recording' ? tr('recording') + ' ' + new Date(Date.now() - attempt.started).toISOString().slice(14, 19)
-          : tr(phase === 'finalizing' ? 'finalizing' : 'connecting');
-      }
     }
     function reset(current) {
       clearTimeout(current.limit); clearInterval(current.timer);
@@ -462,7 +451,7 @@
 
     async function start() {
       if (active) active();
-      const current = { client: null, insertion: composerInsertion(editor), started: 0, limit: null, timer: null, terminal: false, text: '', stopped: false };
+      const current = { client: null, insertion: composerInsertion(editor), limit: null, timer: null, terminal: false, text: '', stopped: false };
       attempt = current; active = cancel; paint('connecting');
       const before = composerText(editor).slice(0, composerSelection(editor).start);
       try {
@@ -488,11 +477,10 @@
         }, {
           onOpen() {
             if (attempt !== current) { client.close(); return; }
-            current.started = Date.now(); paint('recording');
+            paint('recording');
             current.timer = setInterval(() => {
               if (attempt !== current) return;
               if (editor.getClientRects().length === 0) { cancel(); return; }
-              paint(phase);
             }, 1000);
             current.limit = setTimeout(() => {
               if (attempt !== current) return;

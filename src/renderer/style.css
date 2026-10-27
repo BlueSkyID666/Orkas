@@ -6775,11 +6775,23 @@ body.is-task-side-panel-resizing * { cursor: col-resize !important; }
 }
 .chat-mic-btn { margin-left: auto; }
 .chat-mic-icon { display: block; width: 15px; height: 15px; }
-.chat-mic-btn.is-recording { color: var(--danger); background: var(--surface-2); }
-.chat-mic-btn.is-busy { color: var(--muted); }
-.chat-mic-status { font-size: 11px; color: var(--muted); }
-.chat-mic-status:not([hidden]) { margin-left: auto; }
-.chat-mic-status:not([hidden]) + .chat-mic-btn { margin-left: 0; }
+.chat-mic-btn.is-recording {
+  color: #dc2626;
+  background: #fee2e2;
+  animation: chat-mic-pulse 1.3s ease-in-out infinite;
+}
+.chat-mic-btn.is-recording:hover {
+  color: #dc2626;
+  background: #fecaca;
+}
+.chat-mic-btn.is-busy {
+  color: #94a3b8;
+  cursor: default;
+}
+@keyframes chat-mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.28); }
+  60% { box-shadow: 0 0 0 5px rgba(220, 38, 38, 0); }
+}
 .chat-bottom-bar .chat-mic-btn ~ .chat-send-btn { margin-left: 0; }
 
 .composer-model-chip {
