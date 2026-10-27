@@ -2564,6 +2564,26 @@ describe('local-tools › edit_file › file kind / existence', () => {
 });
 
 describe('local-tools › edit_file › matching semantics', () => {
+  it.each(['exact', 'whitespace_relaxed', 'replace_all'])('writes replacement tokens literally (%s)', async (mode) => {
+    await allFilesAuto();
+    const written: string[] = [];
+    const { edit, wsDir } = await buildEditTool({ onFileWritten: (p) => written.push(p) });
+    const p = path.join(wsDir, 'literal.ps1');
+    const needle = 'first\nsecond';
+    const source = mode === 'whitespace_relaxed' ? 'first  \nsecond' : needle;
+    const replacement = "if ($value -match '^ok$') { '$& $$ $` $1 $<name>' }";
+    const before = `prefix\r\n${source}\r\nsuffix` + (mode === 'replace_all' ? `\r\n${source}` : '');
+    const expected = `prefix\r\n${replacement}\r\nsuffix` + (mode === 'replace_all' ? `\r\n${replacement}` : '');
+    fs.writeFileSync(p, before);
+    const result = await run(edit, { path: p, old_string: needle, new_string: replacement, replace_all: mode === 'replace_all' });
+    expect(result.isError).toBeFalsy();
+    expect(fs.readFileSync(p, 'utf8')).toBe(expected);
+    expect(result.content).toContain(`edited="${mode === 'replace_all' ? 2 : 1}"`);
+    expect(result.content).toContain('revision=');
+    expect(written).toEqual([p]);
+    if (mode === 'whitespace_relaxed') expect(result.content).toContain('match="whitespace_relaxed"');
+  });
+
   it('returns bounded real contexts for long-line matches and supports an exact targeted retry', async () => {
     await allFilesAuto();
     const { edit, wsDir } = await buildEditTool();

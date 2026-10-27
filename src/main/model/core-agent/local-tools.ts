@@ -5612,7 +5612,7 @@ function createEditFileTool(opts: LocalToolsOpts): AgentTool {
           };
         }
 
-        const next = replaceAll ? body.split(matchText).join(newStr) : body.replace(matchText, newStr);
+        const next = replaceAll ? body.split(matchText).join(newStr) : body.replace(matchText, () => newStr);
         const oauthClientMismatchErr = guardGoogleWorkspaceOauthClientMismatchText(next);
         if (oauthClientMismatchErr) {
           log.warn('edit_file google oauth client/scope mismatch reject', { user_id: maskId(opts.userId), path: logPathRef(abs) });
