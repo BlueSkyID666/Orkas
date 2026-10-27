@@ -370,7 +370,7 @@ describe('Commander home states', () => {
     expect(h.views.slice(1)).toEqual([['auto', null, { entryPoint: 'home' }], ['todos', null, { entryPoint: 'home' }]]);
   });
 
-  it('returns to the conversation a to-do belongs to, and falls back to the To-dos page when it is gone', async () => {
+  it('opens linked global and project to-dos on their cards even when the conversation exists or is gone', async () => {
     const h = loadHome({
       todos: { total: 2, tasks: [
         { id: 't-saved', project_id: '', status: 'todo', content: 'Write chapter 3', origin_cid: 'conv-origin' },
@@ -381,23 +381,28 @@ describe('Commander home states', () => {
     });
     h.context.homeOnEnter();
     await h.settle();
-    expect(h.html()).toContain('data-home-origin-cid="conv-origin"');
+    const readsBeforeOpen = h.invokes.length;
+    for (const [index, task] of h.data().todos.entries()) {
+      h.els['home-groups'].fire('click', click({
+        '.home-row': { dataset: { homeTodo: task.id, homePid: task.project_id, homeStatus: task.status,
+          homePosition: String(index + 1), homeOriginCid: task.origin_cid } },
+      }));
+      await h.settle();
+      expect(h.context.focusTodo).toHaveBeenNthCalledWith(index + 1, task.project_id, task.id, { entryPoint: 'home' });
+    }
+    expect(h.views).toEqual([]);
+    // Opening a to-do must not depend on reading its execution conversation.
+    expect(h.invokes.slice(readsBeforeOpen)).toEqual([]);
+  });
 
-    h.els['home-groups'].fire('click', click({
-      '.home-row': { dataset: { homeTodo: 't-saved', homePid: '', homeStatus: 'todo', homePosition: '1', homeOriginCid: 'conv-origin' } },
-    }));
-    await h.settle();
-    // Back to the original conversation, with nothing prefilled.
-    expect(h.views).toEqual([['conversation', 'conv-origin', { entryPoint: 'home' }]]);
-    expect(h.context.focusTodo).not.toHaveBeenCalled();
-
-    h.els['home-groups'].fire('click', click({
-      '.home-row': { dataset: { homeTodo: 't-gone', homePid: 'p1', homeStatus: 'progress', homePosition: '2', homeOriginCid: 'conv-deleted' } },
-    }));
-    await h.settle();
-    expect(h.context.focusTodo).toHaveBeenCalledWith('p1', 't-gone', { entryPoint: 'home' });
-    expect(h.invokes.some(([channel, payload]) => channel === 'conversations.getMany'
-      && JSON.stringify(payload.cids) === JSON.stringify(['conv-deleted']))).toBe(true);
+  it.each(['unavailable', 'failed'])('opens the To-dos page when its card locator is %s', async state => {
+    const h = loadHome();
+    h.context.focusTodo = undefined;
+    if (state === 'failed') h.context.loadRendererFeature.mockRejectedValueOnce(new Error('controlled feature load failure'));
+    else h.context.loadRendererFeature = undefined;
+    await h.context._homeOpenTodo({ dataset: { homeTodo: 't_saved', homePid: 'p1', homeOriginCid: 'linked-chat' } });
+    expect(h.views).toEqual([['todos', null, { entryPoint: 'home' }]]);
+    expect(h.invokes).toEqual([]);
   });
 
   it('hides only the group whose lookup failed', async () => {

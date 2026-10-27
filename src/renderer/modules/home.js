@@ -255,9 +255,6 @@ function _homeTodoRowHtml(task, index) {
       'data-home-pid': pid,
       'data-home-status': status,
       'data-home-position': index + 1,
-      // The conversation this to-do belongs to (saved from it, or last run in
-      // it). Opening the row returns there when that conversation still exists.
-      ...(task.origin_cid ? { 'data-home-origin-cid': String(task.origin_cid) } : {}),
     },
     status,
     icon: 'clipboard-list',
@@ -410,34 +407,9 @@ function _homeOpenRun(row) {
   setView('conversation', cid, { entryPoint: 'home' });
 }
 
-// Whether a conversation can still be opened: the sidebar cache first, then one
-// read-only lookup. A failed lookup counts as missing so the row falls back to
-// the To-dos page.
-async function _homeConversationExists(cid) {
-  if (!cid) return false;
-  const rows = typeof conversations !== 'undefined' && Array.isArray(conversations) ? conversations : [];
-  if (rows.some((c) => c && c.conversation_id === cid)) return true;
-  try {
-    const res = await window.orkas.invoke('conversations.getMany', { cids: [cid] });
-    return ((res && res.conversations) || []).some((row) => row && row.conversation_id === cid);
-  } catch (err) {
-    _homeLog.warn('to-do conversation lookup failed', { error_type: _homeErrorType(err) });
-    return false;
-  }
-}
-
 async function _homeOpenTodo(row) {
   const pid = row.dataset.homePid || '';
   const id = row.dataset.homeTodo || '';
-  const originCid = row.dataset.homeOriginCid || '';
-  const openConversation = !!originCid && await _homeConversationExists(originCid);
-  // A to-do that belongs to a conversation returns the user there, so the
-  // work continues with that conversation's plan and history. Nothing is
-  // prefilled; the user decides what to send.
-  if (openConversation) {
-    setView('conversation', originCid, { entryPoint: 'home' });
-    return;
-  }
   // The To-dos page code loads with the page; load it first so the page can
   // open on this to-do.
   try {
