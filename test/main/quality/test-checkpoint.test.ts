@@ -2,13 +2,85 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { createStderrReceipt, combineStderrReceipts } from '../../../scripts/test-stderr-receipt.mjs';
+import { inputFingerprint } from '../../../scripts/test-checkpoint.mjs';
 
 const pcRoot = path.resolve(__dirname, '../../..');
 const node = process.env.ORKAS_TEST_NODE || process.execPath;
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach(root => fs.rmSync(root, { recursive: true, force: true })));
+
+it('checkpoint input scanning yields for cancellation and bounds concurrent metadata work', async () => {
+  const f = fixture();
+  for (let i = 0; i < 100; i++) f.write(`node_modules/fixture/${i}.js`, 'fixture');
+  const original = fs.promises.lstat.bind(fs.promises);
+  let active = 0;
+  let peak = 0;
+  let yielded = false;
+  const pending = new Promise<void>(resolve => setImmediate(() => { yielded = true; resolve(); }));
+  const spy = vi.spyOn(fs.promises, 'lstat').mockImplementation(async (...args) => {
+    peak = Math.max(peak, ++active);
+    try { return await original(...args); } finally { active--; }
+  });
+  try {
+    const result = await inputFingerprint(f.root, {}, {}, [], node);
+    expect(result).toMatch(/^[a-f0-9]{64}$/);
+    expect(yielded).toBe(true);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(32);
+    expect(active).toBe(0);
+  } finally { spy.mockRestore(); await pending; }
+});
+
+it('checkpoint input scanning detects linked dependency edits, additions and deletions without reading bodies', async () => {
+  const f = fixture();
+  const library = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-checkpoint-library-'));
+  roots.push(library);
+  const source = path.join(library, 'dependency.js');
+  fs.writeFileSync(source, 'first');
+  const link = path.join(f.root, 'node_modules/linked');
+  fs.symlinkSync(library, link, process.platform === 'win32' ? 'junction' : 'dir');
+  const scan = () => inputFingerprint(f.root, {}, {}, [], node, [library]);
+  try {
+    const first = await scan();
+    expect(await scan()).toBe(first);
+    const stat = fs.statSync(source);
+    fs.writeFileSync(source, 'other');
+    fs.utimesSync(source, stat.atime, stat.mtime);
+    const edited = await scan();
+    expect(edited).not.toBe(first);
+    const added = path.join(library, 'new.js');
+    fs.writeFileSync(added, 'new dependency');
+    const expanded = await scan();
+    expect(expanded).not.toBe(edited);
+    fs.unlinkSync(added);
+    const deleted = await scan();
+    expect(deleted).not.toBe(expanded);
+    const read = vi.spyOn(fs.promises, 'readFile').mockRejectedValue(new Error('File bodies are private'));
+    const readSync = vi.spyOn(fs, 'readFileSync').mockImplementation(() => { throw new Error('File bodies are private'); });
+    try { expect(await scan()).toBe(deleted); }
+    finally { read.mockRestore(); readSync.mockRestore(); }
+  } finally { fs.unlinkSync(link); }
+});
+
+it('checkpoint input scanning fails closed on inaccessible metadata and settles pending IO', async () => {
+  const f = fixture();
+  const denied = path.join(f.root, 'test/a.test.ts');
+  const original = fs.promises.lstat.bind(fs.promises);
+  let active = 0;
+  const spy = vi.spyOn(fs.promises, 'lstat').mockImplementation(async (...args) => {
+    active++;
+    try {
+      if (String(args[0]) === denied) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return await original(...args);
+    } finally { active--; }
+  });
+  try {
+    await expect(inputFingerprint(f.root, {}, {}, [], node)).rejects.toThrow('Cannot inspect a required checkpoint input');
+    expect(active).toBe(0);
+  } finally { spy.mockRestore(); }
+});
 
 it('attributes the exact stderr bytes across chunk boundaries and concurrent worker line ordering', () => {
   const first = createStderrReceipt();

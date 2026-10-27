@@ -65,7 +65,7 @@ async function stderrMatches(file, expected) {
 // Metadata, not file bodies: tracked private configuration must never be read.
 // ctime also invalidates restored timestamps. Scan once at each batch boundary,
 // never per case; output directories are outside the source inventory.
-export function inputFingerprint(repoRoot, env, selection, inventory, executable, extraRoots = []) {
+export async function inputFingerprint(repoRoot, env, selection, inventory, executable, extraRoots = []) {
   const git = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--deduplicate'], {
     cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
@@ -76,14 +76,30 @@ export function inputFingerprint(repoRoot, env, selection, inventory, executable
     versions: process.versions, executable, cwd: repoRoot, selection, inventory,
     env: Object.entries(env).sort(([a], [b]) => a.localeCompare(b)) });
   let entries = 0;
-  const record = (file, knownStat) => {
+  // Bound both outstanding IO and retained results. Preserve sorted visitation
+  // order so completion order cannot change the fingerprint. Settle the whole
+  // window before reporting a failure or starting recursive directory work.
+  const inspect = async (files, visit) => {
+    for (let offset = 0; offset < files.length; offset += 32) {
+      const window = files.slice(offset, offset + 32);
+      const results = await Promise.allSettled(window.map(file => fs.promises.lstat(file, { bigint: true })));
+      if (results.some(result => result.status === 'rejected' && result.reason.code !== 'ENOENT')) {
+        throw new Error('Cannot inspect a required checkpoint input');
+      }
+      for (let i = 0; i < window.length; i++) {
+        const result = results[i];
+        await visit(window[i], result.status === 'fulfilled' ? result.value : null);
+      }
+    }
+  };
+  const record = async (file, stat) => {
     if (++entries > 500_000) throw new Error('Input inventory exceeds the checkpoint safety limit');
     try {
-      const stat = knownStat || fs.lstatSync(file, { bigint: true });
+      if (!stat) { add([file, 'missing']); return; }
       add([file, stat.mode.toString(), stat.size.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString(), stat.ino.toString()]);
       if (stat.isSymbolicLink()) {
-        const target = fs.realpathSync(file);
-        const resolved = fs.statSync(target, { bigint: true });
+        const target = await fs.promises.realpath(file);
+        const resolved = await fs.promises.stat(target, { bigint: true });
         add([target, resolved.size.toString(), resolved.mtimeNs.toString(), resolved.ctimeNs.toString()]);
       }
     } catch (error) {
@@ -91,34 +107,39 @@ export function inputFingerprint(repoRoot, env, selection, inventory, executable
       add([file, 'missing']);
     }
   };
-  for (const file of git.stdout.split('\0').filter(Boolean).sort()) record(path.join(repoRoot, file));
+  await inspect(git.stdout.split('\0').filter(Boolean).sort().map(file => path.join(repoRoot, file)), record);
   const visited = new Set();
-  const walk = file => {
-    let stat;
-    try { stat = fs.lstatSync(file, { bigint: true }); }
-    catch (error) { if (error.code === 'ENOENT') { record(file); return; } throw error; }
+  const walk = async (file, stat) => {
+    if (!stat) { await record(file, stat); return; }
     if (stat.isSymbolicLink()) {
-      record(file, stat);
+      await record(file, stat);
       // Follow dependency links as well as recording the link itself.
-      if (fs.existsSync(file)) walk(fs.realpathSync(file));
+      let target;
+      try { target = await fs.promises.realpath(file); }
+      catch (error) {
+        if (error.code === 'ENOENT') return;
+        throw new Error('Cannot inspect a required checkpoint input');
+      }
+      await inspect([target], walk);
       return;
     }
-    if (!stat.isDirectory()) { record(file, stat); return; }
+    if (!stat.isDirectory()) { await record(file, stat); return; }
     if (visited.has(file)) return;
     visited.add(file);
-    for (const entry of fs.readdirSync(file).sort()) {
+    let children;
+    try { children = await fs.promises.readdir(file); }
+    catch { throw new Error('Cannot inspect a required checkpoint input'); }
+    await inspect(children.sort().filter(entry => {
       // Vitest writes these caches while collecting/executing unchanged inputs.
-      if (path.basename(file) === 'node_modules' && ['.vite', '.vite-temp', '.cache'].includes(entry)) continue;
-      walk(path.join(file, entry));
-    }
+      return !(path.basename(file) === 'node_modules' && ['.vite', '.vite-temp', '.cache'].includes(entry));
+    }).map(entry => path.join(file, entry)), walk);
   };
   for (const root of ['node_modules', 'src/core-agent/node_modules', 'venv',
     'resources/runtime', 'resources/embedding-model', 'resources/officecli', 'src/main/native/build', 'out', ...extraRoots]) {
-    walk(path.resolve(repoRoot, root));
+    await inspect([path.resolve(repoRoot, root)], walk);
   }
-  record(process.execPath);
-  record(executable);
-  if (env.ORKAS_TEST_PYTHON && path.isAbsolute(env.ORKAS_TEST_PYTHON)) record(env.ORKAS_TEST_PYTHON);
+  await inspect([process.execPath, executable,
+    ...(env.ORKAS_TEST_PYTHON && path.isAbsolute(env.ORKAS_TEST_PYTHON) ? [env.ORKAS_TEST_PYTHON] : [])], record);
   return hash.digest('hex');
 }
 
@@ -199,13 +220,13 @@ export async function runCheckpoint({ directory, resume, batches, args, executab
     if (new Set(inventory).size !== inventory.length) throw new Error('Duplicate test discovery entries');
     batches = Math.min(batches, adapter ? discoveryReport.batchUnits : inventory.length);
     if (!Number.isInteger(batches) || batches < 1) throw new Error('Invalid checkpoint batch inventory');
-    const fingerprint = () => {
+    const fingerprint = async () => {
       const scanStarted = performance.now();
-      const result = inputFingerprint(repoRoot, env, { args, batches, ...(adapter ? { lane: adapter.lane } : {}) }, inventory, executable, adapter?.extraRoots);
+      const result = await inputFingerprint(repoRoot, env, { args, batches, ...(adapter ? { lane: adapter.lane } : {}) }, inventory, executable, adapter?.extraRoots);
       inputScanMs += performance.now() - scanStarted;
       return result;
     };
-    const initial = fingerprint();
+    const initial = await fingerprint();
     const statePath = path.join(directory, 'checkpoint.json');
     const previous = resume ? readJson(statePath) : null;
     const reusable = previous?.schema === 1 && previous.fingerprint === initial
@@ -254,7 +275,7 @@ export async function runCheckpoint({ directory, resume, batches, args, executab
       report = readJson(path.join(directory, reportFile));
       const stderrGap = attempt.exitCode === 0 && !await stderrMatches(path.join(directory, attempt.stderr), report?.stderr);
       const certified = attempt.exitCode === 0 && validReport(report) && !stderrGap;
-      if (fingerprint() !== initial) changed = true;
+      if (await fingerprint() !== initial) changed = true;
       entry = { ...attempt, report: reportFile, reportHash: report ? await hashFile(path.join(directory, reportFile)) : '', certified, stderrGap };
       if (certified && !changed) state.completed[batch] = entry;
       if (changed) state.completed = {};
@@ -266,7 +287,7 @@ export async function runCheckpoint({ directory, resume, batches, args, executab
     // A cached or newly executed shard may never hide an omitted/new file.
     const executed = results.flatMap(result => result.files.map(file => file.file)).sort();
     const complete = JSON.stringify(executed) === JSON.stringify(inventory);
-    changed ||= fingerprint() !== initial;
+    changed ||= await fingerprint() !== initial;
     const exitCode = !complete || changed || results.some(result => !result.certified) ? 1 : 0;
     // Missing evidence for one batch must not discard independently certified
     // siblings. A fully certified but inconsistent union invalidates all shards.
