@@ -193,7 +193,7 @@
   async function run(retry = false) {
     if (busy || loading || owner !== user() || (!retry && !confirming)) return;
     busy = true; confirming = false; stopped = false; error = false;
-    const operationOwner = owner, retryIds = failed.slice(); failed = [];
+    const operationOwner = owner, startedAt = Date.now(), retryIds = failed.slice(); failed = [];
     result = { deleted: 0, skipped: 0, failed: 0, done: 0, total: retry ? retryIds.length : selectedCount() }; render();
     try {
       let next = 0;
@@ -222,6 +222,11 @@
     } catch (_) { error = true; }
     finally {
       busy = false;
+      if (typeof _logConversationManageResult === 'function') {
+        const failedOperation = error || result.failed;
+        _logConversationManageResult('delete', startedAt, failedOperation ? 'failure' : 'success',
+          failedOperation ? 'delete_failed' : '');
+      }
       if (operationOwner === user()) {
         window.initRecycleBin?.();
         if (typeof loadConversations === 'function') try { await loadConversations({ fresh: true }); } catch (_) { log.warn('cleanup navigation refresh failed'); }
