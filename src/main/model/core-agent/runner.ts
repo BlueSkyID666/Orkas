@@ -29,6 +29,7 @@ import {
   hasConfiguredModel,
   getConfiguredModelCooldown,
   getConfiguredModelOAuthExpiredMessage,
+  getConfiguredModelContextWindowMessage,
   type ChatEntryChoice,
 } from '../../features/auth';
 import {
@@ -111,11 +112,14 @@ import {
   buildMoonshotModel,
   buildDeepSeekModel,
   buildDoubaoModel,
+  buildConfiguredOpenAICompatibleModel,
+  createConfiguredOpenAICompatibleProvider,
   createMoonshotProvider,
   createDeepSeekProvider,
   createDoubaoProvider,
   buildCustomOpenAICompatibleModel,
   buildCustomAnthropicModel,
+  buildCustomResponsesModel,
   createCustomOpenAICompatibleProvider,
   omitReservedOutputLimitForProvider,
 } from './external-providers';
@@ -123,7 +127,7 @@ import { withTaskBudget } from './task-budget-provider';
 import { createRotatingProvider, type RotatingCandidate } from './rotating-provider';
 import { clearCooldown } from './profile-cooldown';
 import {
-  EXTERNAL_API_PROVIDERS,
+  isExternalApiProvider,
   resolveConfiguredPiModel,
   modelInputImageLimit,
 } from '../provider_catalog';
@@ -180,10 +184,12 @@ function buildExternalProviderModel(
       return customConfig
         ? (customConfig.protocol === 'anthropic'
           ? buildCustomAnthropicModel(modelId, customConfig)
-          : buildCustomOpenAICompatibleModel(modelId, customConfig))
+          : customConfig.protocol === 'responses'
+            ? buildCustomResponsesModel(modelId, customConfig)
+            : buildCustomOpenAICompatibleModel(modelId, customConfig))
         : null;
     default:
-      return null;
+      return buildConfiguredOpenAICompatibleModel(providerId, modelId);
   }
 }
 
@@ -415,7 +421,7 @@ export interface NativeSearchInjectedInfo {
 function inputImageLimitForChoice(mod: CA, choice: ChatEntryChoice | undefined): number {
   const providerId = choice?.provider || 'anthropic';
   const modelId = choice?.model || 'claude-opus-4-8';
-  const model = EXTERNAL_API_PROVIDERS.includes(providerId)
+  const model = isExternalApiProvider(providerId)
     ? buildExternalProviderModel(providerId, modelId, choice?.customConfig)
     : resolveConfiguredPiModel(mod, providerId, modelId)?.model;
   return modelInputImageLimit(providerId, modelId, model);
@@ -501,6 +507,8 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const group = await pickChatEntryGroup();
   const primary: ChatEntryChoice | undefined = group[0];
   if (!primary && (params.requireImageInput || !process.env.ANTHROPIC_API_KEY)) {
+    const contextWindowMessage = getConfiguredModelContextWindowMessage();
+    if (contextWindowMessage) throw new Error(contextWindowMessage);
     const oauthExpiredMessage = getConfiguredModelOAuthExpiredMessage();
     if (oauthExpiredMessage) throw new Error(oauthExpiredMessage);
     const cooldown = getConfiguredModelCooldown();
@@ -1507,7 +1515,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const modelCatalog: Record<string, { provider: string; model: string; contextWindow?: number; maxOutputTokens?: number }> = {};
   for (const choice of group) {
     if (modelCatalog[choice.model]) continue;
-    const model = EXTERNAL_API_PROVIDERS.includes(choice.provider)
+    const model = isExternalApiProvider(choice.provider)
       ? buildExternalProviderModel(choice.provider, choice.model, choice.customConfig)
       : resolveConfiguredPiModel(mod, choice.provider, choice.model)?.model;
     if (modelOutputLimitExceedsWindow(model)) {
@@ -1776,7 +1784,7 @@ async function buildExternalProvider(
         ...choice.customConfig,
       });
     default:
-      throw new Error(`no external provider factory for "${providerId}"`);
+      return createConfiguredOpenAICompatibleProvider({ providerId, apiKey, modelId });
   }
 }
 
@@ -1817,7 +1825,7 @@ async function buildRotatingProvider(
   const candidates: RotatingCandidate[] = group.map((choice) => {
     const candProviderId = choice.provider;
     const candModelId = choice.model;
-    const isExternal = EXTERNAL_API_PROVIDERS.includes(candProviderId);
+    const isExternal = isExternalApiProvider(candProviderId);
     const resolvedModel = isExternal
       ? null
       : resolveConfiguredPiModel(mod, candProviderId, candModelId);
@@ -1843,9 +1851,15 @@ async function buildRotatingProvider(
         && candidateMaxTokens > 0
         ? { maxTokens: Math.trunc(candidateMaxTokens) }
         : {}),
+      ...(choice.refreshApiKey ? { refreshCredential: async () => {
+        const refreshed = await choice.refreshApiKey!(currentApiKey);
+        if (!refreshed) return false;
+        currentApiKey = refreshed;
+        return true;
+      } } : {}),
       build: async () => {
         if (isExternal) {
-          return withTaskBudget(await buildExternalProvider(choice, usageContext), cid);
+          return withTaskBudget(await buildExternalProvider({ ...choice, apiKey: currentApiKey }, usageContext), cid);
         }
         if (resolvedModel?.isConfiguredFallback) {
           log.info('using configured model fallback', {

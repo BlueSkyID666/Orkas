@@ -78,7 +78,7 @@ describe('client_config', () => {
       google: { model: 'fixture-image', api: 'gemini', supports_edit: true },
     } } }, restart: {}, config_hash: 'fixture-image-edit' }, 'fixture-image-edit');
     expect(getConfiguredImageGenCapability('google')).toMatchObject({ model: 'fixture-image', supportsEdit: true });
-    expect(DEFAULT_IMAGE_GEN_BY_PROVIDER.doubao.model).toBe('doubao-seedream-5-0-lite-260128');
+    expect(DEFAULT_IMAGE_GEN_BY_PROVIDER.doubao.model).toBe('doubao-seedream-5-0-flash-260915');
     // The normalized camelCase form is read again through the same catalog path.
     expect(getConfiguredImageGenCapability('google')).toMatchObject({ supportsEdit: true });
   });

@@ -3517,3 +3517,65 @@ describe('runner › bounded Skill creation correction', () => {
     expect(complete).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('runner public configured model and credential recovery', () => {
+  it('builds a declared API-key provider with its configured endpoint and model budget', async () => {
+    const createPiProvider = vi.fn(({ provider, customModel }: any) => ({ id: provider, name: 'Declared provider',
+      async *stream() { yield { type: 'text_delta' as const, text: 'ok' }; yield { type: 'message_end' as const, model: customModel.id, stopReason: 'end_turn' as const }; },
+      complete: vi.fn(), validateAuth: vi.fn() }));
+    vi.doMock('#core-agent', async () => ({ ...await vi.importActual<any>('#core-agent'), createPiProvider }));
+    const { clientConfig } = await import('../../../src/main/features/client_config');
+    clientConfig.applyServerPayload({ immediate: { model_catalog: {
+      providers: { acme: [{ id: 'acme-vision', contextWindow: 96000, maxTokens: 8192, supportsVision: true }] },
+      openai_compatible_providers: { acme: { label: 'Acme', baseUrl: 'https://api.acme.example/v1' } },
+    } }, restart: {}, config_hash: 'declared-runner' }, 'declared-runner');
+    const auth = await import('../../../src/main/features/auth');
+    await auth.addApiKeyEntry('acme', 'acme-vision', 'synthetic-declared-key');
+    expect(await auth.getChatPreloadApi()).toBe('openai-completions');
+    const { buildRunner } = await loadRunner();
+    const built = await buildRunner({ sessionId: 'gconv-declared-runner', userId: RUNNER_TEST_UID });
+    for await (const _ of (built.runner as any).providers.get('acme').stream({ messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }] })) { }
+    expect(createPiProvider).toHaveBeenCalledOnce();
+    expect(createPiProvider).toHaveBeenCalledWith(expect.objectContaining({ provider: 'acme', apiKey: 'synthetic-declared-key',
+      customModel: expect.objectContaining({ api: 'openai-completions', baseUrl: 'https://api.acme.example/v1', contextWindow: 96000, maxTokens: 8192, input: ['text', 'image'] }) }));
+  });
+
+  it('rebuilds the same OAuth candidate with the replacement key after one upstream 401', async () => {
+    const used: string[] = [];
+    const createPiProvider = vi.fn(({ provider, apiKey }: any) => ({ id: provider, name: 'OAuth recovery',
+      complete: async () => { used.push(apiKey); if (apiKey === 'synthetic-old') throw Object.assign(new Error('Unauthorized'), { status: 401 });
+        return { role: 'assistant', model: 'gpt-5.6-sol', content: [{ type: 'text', text: 'recovered' }], stopReason: 'end_turn' }; },
+      stream: vi.fn(), validateAuth: vi.fn() }));
+    vi.doMock('#core-agent', async () => ({ ...await vi.importActual<any>('#core-agent'), createPiProvider }));
+    const auth = await import('../../../src/main/features/auth');
+    const refreshApiKey = vi.fn(async (rejected: string) => rejected === 'synthetic-old' ? 'synthetic-new' : undefined);
+    vi.spyOn(auth, 'pickChatEntryGroup').mockResolvedValue([{ entryId: 'refresh-entry', profileId: 'oauth-recovery-owner', provider: 'openai', model: 'gpt-5.6-sol', apiKey: 'synthetic-old', refreshApiKey }]);
+    const { buildRunner } = await loadRunner();
+    const built = await buildRunner({ sessionId: 'gconv-public-oauth-recovery', userId: RUNNER_TEST_UID });
+    const result = await (built.runner as any).providers.get('openai').complete({ model: 'gpt-5.6-sol', messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }] });
+    expect(result.content).toContainEqual({ type: 'text', text: 'recovered' });
+    expect(used).toEqual(['synthetic-old', 'synthetic-new']);
+    expect(refreshApiKey).toHaveBeenCalledExactlyOnceWith('synthetic-old');
+    expect(createPiProvider).toHaveBeenCalledTimes(2);
+    expect((await import('../../../src/main/model/core-agent/profile-cooldown')).getCooldown('oauth-recovery-owner')).toBeUndefined();
+  });
+});
+
+describe('runner legacy capacity remediation', () => {
+  it('explains an all-small saved configuration before constructing a model provider', async () => {
+    const paths = await import('../../../src/main/paths');
+    const secrets = await import('../../../src/main/util/local-secret-store');
+    const file = paths.userAuthProfilesFile(RUNNER_TEST_UID);
+    const context = { namespace: 'auth.profiles', ownerId: RUNNER_TEST_UID, recordId: 'auth-profiles.json' };
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, secrets.encryptLocalSecret(context, JSON.stringify({ version: 6, profiles: {
+      'custom:small': { type: 'api_key', provider: 'custom', label: 'small', key: 'synthetic-small', baseUrl: 'https://capacity.example/v1', contextWindow: 31999, maxTokens: 8192, createdAt: 1, lastUsed: 0 },
+    }, entries: [{ entryId: 'small-entry', provider: 'custom', profileId: 'custom:small', model: 'small-fixture', createdAt: 1, lastUsed: 0 }] })));
+    const before = fs.readFileSync(file, 'utf8');
+    const { t } = await import('../../../src/main/i18n');
+    const { buildRunner } = await loadRunner();
+    await expect(buildRunner({ sessionId: 'gconv-small-remediation', userId: RUNNER_TEST_UID }))
+      .rejects.toThrow(t('errors.model_context_too_small', { minimum: 32000 }));
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+  });
+});

@@ -35,15 +35,12 @@
  *
  * Pick algorithm (pickChatEntry / pickChatEntryGroup)
  *   1. Walk entries top-to-bottom.
- *   2. Group consecutive entries by (provider, model): the first group hit
- *      is the "primary" model; entries in that group round-robin by
- *      lastUsed (oldest picked first).
- *   3. For each candidate, check credential is usable:
- *        - api_key:  key is present, profile not in cooldown
- *        - oauth:    access token not expired, OR refresh succeeds
- *      If unusable, try the next candidate in the group, then the next
- *      group.
- *   4. Bump lastUsed on the chosen entry.
+ *   2. Preserve that priority even when adjacent entries share a model.
+ *   3. For each candidate, check that its credential is usable:
+ *        - api_key: key is present, profile not in cooldown
+ *        - oauth: access token not expired, OR one refresh succeeds
+ *      If unusable, try the next candidate in user order.
+ *   4. Picking is read-only; request completion owns usage updates.
  *
  * Cooldown (`model/core-agent/profile-cooldown.ts`)
  *   A profile that fails with a key-specific error (401 / 403 / 429 / 402;
@@ -65,6 +62,7 @@ import { shell } from 'electron';
 
 import { userAuthProfilesFile, userLocalConfigDir } from '../paths';
 import * as localSecrets from '../util/local-secret-store';
+import { MIN_NATIVE_MODEL_CONTEXT_WINDOW, modelContextWindowBelowMinimum } from '../util/model-context-window';
 import { isBearerTokenHeaderSafe } from '../util/http-authorization';
 import { safeExternalUserActionUrl } from '../util/window-security';
 import { getActiveUserId, hasActiveUser } from './users';
@@ -74,6 +72,9 @@ import {
   OAUTH_ALIAS_FOR,
   VISIBLE_PROVIDERS,
   EXTERNAL_API_PROVIDERS,
+  isExternalApiProvider,
+  configuredOpenAICompatibleProviders,
+  getConfiguredOpenAICompatibleProvider,
   isVisibleProvider,
   curatedModelsFor,
   isSelectableModel,
@@ -191,7 +192,7 @@ interface ApiKeyProfile {
   key: string;
   /** Present only for the custom provider. */
   baseUrl?: string;
-  protocol?: 'openai' | 'anthropic';
+  protocol?: 'openai' | 'responses' | 'anthropic';
   contextWindow?: number;
   maxTokens?: number;
   supportsReasoning?: boolean;
@@ -921,14 +922,15 @@ function isEntryAllowed(store: ProfilesFile, entry: Entry): boolean {
   return !!prof
     && isModelProviderAllowed(entry.provider, entry.model)
     && !isStoredProfileBlocked(prof)
-    && (!providerUsesCustomOpenAIConfig(entry.provider) || !!customRuntimeConfigFromProfile(prof))
+    && (!providerUsesCustomOpenAIConfig(entry.provider) || (!!customRuntimeConfigFromProfile(prof) && !entryHasSmallCustomWindow(store, entry)))
     && isSelectableModel(entry.provider, entry.model);
 }
 
-function modelNotAvailableError(): Error & { code: string } {
-  return Object.assign(new Error(t('errors.model_not_available')), {
-    code: 'MODEL_NOT_AVAILABLE',
-  });
+function modelNotAvailableError(contextTooSmall = false): Error & { code: string } {
+  const err = new Error(t(contextTooSmall ? 'errors.model_context_too_small' : 'errors.model_not_available',
+    { minimum: MIN_NATIVE_MODEL_CONTEXT_WINDOW })) as Error & { code: string };
+  err.code = 'MODEL_NOT_AVAILABLE';
+  return err;
 }
 
 /** A configured SDK-backed model is usable only when pi-ai knows the exact id
@@ -936,37 +938,49 @@ function modelNotAvailableError(): Error & { code: string } {
  * Direct adapters build their own Model objects and remain independently
  * resolvable. */
 function isRuntimeModelResolvable(
-  catalog: CoreAgentModule,
+  catalog: CoreAgentModule | null,
   providerId: string,
   modelId: string,
+  ignoreContextMinimum = false,
 ): boolean {
   if (!isSelectableModel(providerId, modelId)) return false;
-  if (EXTERNAL_API_PROVIDERS.includes(providerId)) return true;
-  return resolveConfiguredPiModel(catalog, providerId, modelId) !== null;
+  const external = isExternalApiProvider(providerId);
+  const resolved = !external && catalog ? resolveConfiguredPiModel(catalog, providerId, modelId) : null;
+  if (!external && !resolved) return false;
+  const window = external
+    ? curatedModelsFor(providerId).find(model => model.id === modelId)?.contextWindow
+    : resolved?.model.contextWindow;
+  return ignoreContextMinimum || !modelContextWindowBelowMinimum(window);
 }
 
 async function assertRuntimeSelectableModel(providerId: string, modelId: string): Promise<void> {
   if (!isSelectableModel(providerId, modelId)) throw modelNotAvailableError();
-  if (EXTERNAL_API_PROVIDERS.includes(providerId)) return;
-  if (isRuntimeModelResolvable(await ca(), providerId, modelId)) return;
-  throw modelNotAvailableError();
+  const catalog = isExternalApiProvider(providerId) ? null : await ca();
+  if (isRuntimeModelResolvable(catalog, providerId, modelId)) return;
+  throw modelNotAvailableError(isRuntimeModelResolvable(catalog, providerId, modelId, true));
 }
 
-type RuntimeModelResolver = (providerId: string, modelId: string) => boolean;
+type RuntimeModelResolver = (providerId: string, modelId: string, ignoreContextMinimum?: boolean) => boolean;
 
 async function buildRuntimeModelResolver(
   entries: readonly Pick<Entry, 'provider' | 'model'>[],
 ): Promise<RuntimeModelResolver> {
   const needsPiCatalog = entries.some((entry) => (
     isSelectableModel(entry.provider, entry.model)
-    && !EXTERNAL_API_PROVIDERS.includes(entry.provider)
+    && !isExternalApiProvider(entry.provider)
   ));
   const catalog = needsPiCatalog ? await ca() : null;
-  return (providerId, modelId) => (
-    isSelectableModel(providerId, modelId)
-    && (EXTERNAL_API_PROVIDERS.includes(providerId)
-      || (!!catalog && isRuntimeModelResolvable(catalog, providerId, modelId)))
-  );
+  const resolutions = new Map<string, { allowed: boolean; exists: boolean }>();
+  return (providerId, modelId, ignoreContextMinimum) => {
+    const key = JSON.stringify([providerId, modelId]);
+    let facts = resolutions.get(key);
+    if (!facts) {
+      const allowed = isRuntimeModelResolvable(catalog, providerId, modelId);
+      facts = { allowed, exists: allowed || isRuntimeModelResolvable(catalog, providerId, modelId, true) };
+      resolutions.set(key, facts);
+    }
+    return ignoreContextMinimum ? facts.exists : facts.allowed;
+  };
 }
 
 function makeProfileId(provider: string, label: string): string {
@@ -1006,7 +1020,7 @@ function customConfigError(code: string, message: string): Error & { code: strin
 
 export function normalizeCustomModelBaseUrl(
   raw: string,
-  protocol: 'openai' | 'anthropic' = 'openai',
+  protocol: 'openai' | 'responses' | 'anthropic' = 'openai',
   normalizeEndpoint = true,
 ): string {
   const value = String(raw || '').trim();
@@ -1032,6 +1046,10 @@ export function normalizeCustomModelBaseUrl(
     // can consume a gateway prefix that itself ends in /v1.
     return normalizeEndpoint ? normalizeAnthropicBaseUrl(url.toString()) : url.toString().replace(/\/+$/, '');
   }
+  if (protocol === 'responses') {
+    if (normalizeEndpoint) url.pathname = url.pathname.replace(/\/+$/, '').replace(/\/responses$/i, '') || '/';
+    return url.toString().replace(/\/+$/, '');
+  }
   const chatPathIndex = url.pathname.search(/\/chat(?:\/|$)/i);
   if (chatPathIndex >= 0) {
     url.pathname = url.pathname.slice(0, chatPathIndex).replace(/\/+$/, '') || '/';
@@ -1043,10 +1061,11 @@ function normalizeCustomTokenLimit(
   raw: number | string | null | undefined,
   fallback: number,
   field: 'contextWindow' | 'maxTokens',
+  contextMinimum = MIN_NATIVE_MODEL_CONTEXT_WINDOW,
 ): number {
   if (raw === undefined || raw === null || raw === '') return fallback;
   const value = typeof raw === 'number' || typeof raw === 'string' ? Number(raw) : NaN;
-  const minimum = field === 'contextWindow' ? 1_024 : 1;
+  const minimum = field === 'contextWindow' ? contextMinimum : 1;
   if (!Number.isInteger(value) || value < minimum || value > MAX_CUSTOM_TOKEN_LIMIT) {
     throw customConfigError(
       'CUSTOM_TOKEN_LIMIT_INVALID',
@@ -1061,12 +1080,13 @@ function customRuntimeConfigFromProfile(
 ): CustomOpenAICompatibleRuntimeConfig | null {
   if (!profile || profile.type !== 'api_key' || profile.provider !== CUSTOM_MODEL_PROVIDER) return null;
   try {
-    const protocol = profile.protocol === 'anthropic' ? 'anthropic' : 'openai';
+    const protocol = profile.protocol === 'anthropic' ? 'anthropic' : profile.protocol === 'responses' ? 'responses' : 'openai';
     const baseUrl = normalizeCustomModelBaseUrl(profile.baseUrl || '', protocol, false);
     const contextWindow = normalizeCustomTokenLimit(
       profile.contextWindow,
       DEFAULT_CUSTOM_CONTEXT_WINDOW,
       'contextWindow',
+      1_024,
     );
     const maxTokens = normalizeCustomTokenLimit(
       profile.maxTokens,
@@ -1291,7 +1311,7 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
   }
 
   // Visible set: whitelist + providers with saved profiles.
-  const visible = new Set<string>(VISIBLE_PROVIDERS);
+  const visible = new Set<string>([...VISIBLE_PROVIDERS, ...configuredOpenAICompatibleProviders().map(p => p.id)]);
   for (const pid of byProvider.keys()) {
     if (isModelProviderAllowed(pid)) visible.add(pid);
   }
@@ -1323,7 +1343,7 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
     const directOAuth = oauthIds.has(id);
     const aliasOAuth  = OAUTH_ALIAS_FOR[id];
     const supportsOAuth = directOAuth || (!!aliasOAuth && oauthIds.has(aliasOAuth));
-    const supportsApiKey = apiCapable.has(id) && !oauthOnlyIds.has(id);
+    const supportsApiKey = (apiCapable.has(id) || isExternalApiProvider(id)) && !oauthOnlyIds.has(id);
     return {
       id,
       label: providerLabel(id),
@@ -1357,8 +1377,9 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
   const allowed = (models: { id: string; name: string }[]) =>
     models.filter((m) => isModelProviderAllowed(id, m.id));
   const curated = curatedModelsFor(id);
-  const policyAllowed = allowed(curated.filter(model => model.hiddenFromPicker !== true));
-  if (EXTERNAL_API_PROVIDERS.includes(id) || policyAllowed.length === 0) {
+  const policyAllowed = allowed(curated.filter(model => model.hiddenFromPicker !== true && !modelContextWindowBelowMinimum(model.contextWindow)));
+
+  if (isExternalApiProvider(id) || policyAllowed.length === 0) {
     return { models: policyAllowed };
   }
   const catalog = await ca();
@@ -1379,6 +1400,9 @@ export async function addApiKey(
   if (!id) throw new Error('provider required');
   if (!key) throw new Error('api key required');
   assertModelProviderAllowed(id);
+  if (getConfiguredOpenAICompatibleProvider(id) && !isBearerTokenHeaderSafe(key)) {
+    throw customConfigError('API_KEY_INVALID', 'Invalid API key for HTTP Authorization headers');
+  }
   if (providerUsesCustomOpenAIConfig(id)) {
     throw customConfigError('CUSTOM_CONFIG_REQUIRED', 'Use the custom model configuration flow');
   }
@@ -1419,6 +1443,9 @@ export async function addApiKeyEntry(
   if (!model) throw new Error('model required');
   if (!key) throw new Error('api key required');
   assertModelProviderAllowed(id, model);
+  if (getConfiguredOpenAICompatibleProvider(id) && !isBearerTokenHeaderSafe(key)) {
+    throw customConfigError('API_KEY_INVALID', 'Invalid API key for HTTP Authorization headers');
+  }
   if (providerUsesCustomOpenAIConfig(id)) {
     throw customConfigError('CUSTOM_CONFIG_REQUIRED', 'Use the custom model configuration flow');
   }
@@ -1461,7 +1488,7 @@ export async function addApiKeyEntry(
 
 export interface AddCustomModelEntryInput {
   label?: string;
-  protocol?: 'openai' | 'anthropic' | string;
+  protocol?: 'openai' | 'responses' | 'anthropic' | string;
   baseUrl: string;
   model: string;
   apiKey: string;
@@ -1478,7 +1505,7 @@ export async function addCustomModelEntry(
 ): Promise<{ profileId: string; entryId: string }> {
   const rawLabel = String(input?.label || '').trim();
   const model = String(input?.model || '').trim();
-  const protocol = input?.protocol === 'anthropic' ? 'anthropic' : 'openai';
+  const protocol = input?.protocol === 'anthropic' ? 'anthropic' : input?.protocol === 'responses' ? 'responses' : 'openai';
   const key = String(input?.apiKey || '').trim();
   if (!model) throw customConfigError('CUSTOM_MODEL_REQUIRED', 'Model ID required');
   if (!key) throw customConfigError('CUSTOM_API_KEY_REQUIRED', 'API key required');
@@ -1513,7 +1540,7 @@ export async function addCustomModelEntry(
       'reasoningEffort must be low, medium, or high',
     );
   }
-  if (maxTokens !== undefined && maxTokens > contextWindow) {
+  if ((maxTokens ?? DEFAULT_CUSTOM_MAX_TOKENS) > contextWindow) {
     throw customConfigError(
       'CUSTOM_TOKEN_LIMIT_INVALID',
       'Maximum output tokens cannot exceed the context window',
@@ -1615,6 +1642,9 @@ export interface EntryView {
   modelEditable: boolean;
   modelAvailable: boolean;
   includedModels: string[];
+  selectable?: boolean;
+  availability?: 'available' | 'catalog_removed' | 'credential_missing' | 'context_too_small' | 'service_disabled';
+  availabilityReason?: string;
   official?: boolean;
   recommended?: boolean;
   profileId: string;
@@ -1632,10 +1662,18 @@ function entryToView(
   store: ProfilesFile,
   modelNameLookup: (p: string, m: string) => string,
   runtimeResolvable = true,
+  contextTooSmall = false,
 ): EntryView {
   const prof = store.profiles[e.profileId];
   const catalogModel = curatedModelsFor(e.provider).find((model) => model.id === e.model);
+  const availability = contextTooSmall || entryHasSmallCustomWindow(store, e) ? 'context_too_small'
+    : !isSelectableModel(e.provider, e.model) || !runtimeResolvable ? 'catalog_removed'
+      : !isModelProviderAllowed(e.provider, e.model) ? 'service_disabled'
+      : !prof || (providerUsesCustomOpenAIConfig(e.provider) && !customRuntimeConfigFromProfile(prof)) ? 'credential_missing' : 'available';
   const base = {
+    selectable: availability === 'available',
+    availability: availability as NonNullable<EntryView['availability']>,
+    ...(availability === 'context_too_small' ? { availabilityReason: t('errors.model_context_too_small', { minimum: MIN_NATIVE_MODEL_CONTEXT_WINDOW }) } : {}),
     entryId: e.entryId,
     provider: e.provider,
     providerLabel: providerLabel(e.provider),
@@ -1696,18 +1734,21 @@ export async function getChatPreloadApi(): Promise<string | null> {
   if (!isActiveAuthOwner(uid)) return null;
   const entry = allowed.find(entry => resolvable(entry.provider, entry.model));
   if (!entry) return null;
-  if (EXTERNAL_API_PROVIDERS.includes(entry.provider)) {
+  if (isExternalApiProvider(entry.provider)) {
     const models = await import('../model/core-agent/external-providers');
     if (!isActiveAuthOwner(uid)) return null;
     if (entry.provider === ORKAS_API_PROVIDER) return models.buildOrkasApiModel(entry.model).api;
     if (entry.provider === 'moonshot') return models.buildMoonshotModel(entry.model).api;
     if (entry.provider === 'deepseek') return models.buildDeepSeekModel(entry.model).api;
     if (entry.provider === 'doubao') return models.buildDoubaoModel(entry.model).api;
+    const configured = models.buildConfiguredOpenAICompatibleModel(entry.provider, entry.model);
+    if (configured) return configured.api;
     const config = customRuntimeConfigFromProfile(store.profiles[entry.profileId]);
     if (!config) return null;
     return (config.protocol === 'anthropic'
       ? models.buildCustomAnthropicModel(entry.model, config)
-      : models.buildCustomOpenAICompatibleModel(entry.model, config)).api;
+      : config.protocol === 'responses' ? models.buildCustomResponsesModel(entry.model, config)
+        : models.buildCustomOpenAICompatibleModel(entry.model, config)).api;
   }
   const catalog = await ca();
   if (!isActiveAuthOwner(uid)) return null;
@@ -1731,6 +1772,7 @@ export async function listEntries(
         store,
         lookup,
         runtimeResolvable(entry.provider, entry.model),
+        entryContextWindowTooSmall(store, entry, runtimeResolvable),
       )),
   };
 }
@@ -1886,7 +1928,7 @@ export async function selectEntry(
   if (
     !isEntryAllowed(store, selected)
     || !runtimeResolvable(selected.provider, selected.model)
-  ) throw modelNotAvailableError();
+  ) throw modelNotAvailableError(entryContextWindowTooSmall(store, selected, runtimeResolvable));
 
   const runnable = store.entries.filter((entry) => (
     isEntryAllowed(store, entry) && runtimeResolvable(entry.provider, entry.model)
@@ -2229,32 +2271,7 @@ export interface ChatEntryChoice {
   model: string;
   apiKey: string;
   customConfig?: CustomOpenAICompatibleRuntimeConfig;
-}
-
-/**
- * Group consecutive entries by `(provider, model)`. Dropped into a helper
- * so `pickChatEntry` (single winner) and `pickChatEntryGroup` (whole
- * group of candidates for rotation) share exactly the same grouping
- * semantics — including the "first group wins" priority rule.
- */
-function groupEntries(entries: Entry[]): Entry[][] {
-  const groups: Entry[][] = [];
-  let current: Entry[] = [];
-  let currentKey = '';
-  for (const e of entries) {
-    const key = providerUsesCustomOpenAIConfig(e.provider)
-      ? `${e.provider}::${e.model}::${e.profileId}`
-      : `${e.provider}::${e.model}`;
-    if (key !== currentKey) {
-      if (current.length) groups.push(current);
-      current = [e];
-      currentKey = key;
-    } else {
-      current.push(e);
-    }
-  }
-  if (current.length) groups.push(current);
-  return groups;
+  refreshApiKey?: (rejectedApiKey: string) => Promise<string | undefined>;
 }
 
 /**
@@ -2353,11 +2370,7 @@ export function bumpEntryLastUsed(entryId: string): void {
  * can fall back to a completely different provider+model if that's how
  * the user arranged their list.
  *
- * Within a run of consecutive entries sharing the same `(provider, model)`
- * (often: multiple API keys for the same model), we still pre-order by
- * oldest `lastUsed` first so load spreads fairly — but we flatten the
- * ordered sub-lists back into a single stream so the rotating provider
- * sees one simple sequence.
+ * Credentials retain user order even when they share provider and model.
  *
  * Skips:
  *   - entries whose profile was deleted
@@ -2376,16 +2389,11 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
   const runtimeResolvable = await buildRuntimeModelResolver(store.entries);
   if (!isActiveAuthOwner(userId)) return [];
 
-  // Flatten: preserve entries[] order across groups, but within a
-  // consecutive same-(provider, model) run, sort oldest lastUsed first.
-  const groups = groupEntries(store.entries);
-  const ordered: Entry[] = [];
-  for (const group of groups) {
-    const sorted = [...group].sort((a, b) => (a.lastUsed || 0) - (b.lastUsed || 0));
-    for (const e of sorted) ordered.push(e);
-  }
+  // User priority applies to each credential, including identical models.
+  const ordered: Entry[] = [...store.entries];
 
   const choices: ChatEntryChoice[] = [];
+  const resolvedApiKeys = new Map<string, Promise<string | undefined>>();
   for (const entry of ordered) {
     if (!isEntryAllowed(store, entry)) {
       log.info(`skipping disabled provider/model ${entry.provider}/${entry.model}`);
@@ -2399,7 +2407,12 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
       log.info(`skipping cooled-down profile ${entry.profileId}`);
       continue;
     }
-    const apiKey = await resolveEntryApiKey(store, entry, userId);
+    let pendingKey = resolvedApiKeys.get(entry.profileId);
+    if (!pendingKey) {
+      pendingKey = resolveEntryApiKey(store, entry, userId);
+      resolvedApiKeys.set(entry.profileId, pendingKey);
+    }
+    const apiKey = await pendingKey;
     // Even an immediately available key crosses an await boundary here.
     if (!isActiveAuthOwner(userId)) return [];
     if (!apiKey) continue;
@@ -2410,6 +2423,9 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
       provider: entry.provider,
       model: entry.model,
       apiKey,
+      ...(store.profiles[entry.profileId]?.type === 'oauth' ? {
+        refreshApiKey: (rejectedApiKey: string) => refreshOAuthProfileAfterAuthFailure(entry.profileId, rejectedApiKey, userId),
+      } : {}),
       ...(customConfig ? { customConfig } : {}),
     });
   }
@@ -2419,7 +2435,7 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
 /**
  * Pick the next chat entry respecting user priority. Thin wrapper over
  * `pickChatEntryGroup` that returns the top candidate (first group,
- * oldest-lastUsed first) and bumps `lastUsed` immediately. Callers that
+ * user order). Selection is read-only; completed requests own usage updates. Callers that
  * want rotation (runner.ts's chat path) use `pickChatEntryGroup` directly;
  * callers that only need one key (testConnection with provider-only mode)
  * keep using this.
@@ -2429,9 +2445,7 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
 export async function pickChatEntry(): Promise<ChatEntryChoice | null> {
   const group = await pickChatEntryGroup();
   if (group.length === 0) return null;
-  const chosen = group[0];
-  bumpEntryLastUsed(chosen.entryId);
-  return chosen;
+  return group[0];
 }
 
 /** Retained for one legacy caller (testConnection with a specific provider). */
@@ -2540,7 +2554,7 @@ async function performOAuthProfileRefresh(
   if (!isSameOAuthCredential(loadProfiles({ userId }).profiles[profileId], prof)) return undefined;
   let newCreds: any;
   try {
-    newCreds = await provider.refreshToken(creds as any);
+    newCreds = await oauth.refreshOAuthProviderWithTimeout(provider, creds as any);
   } catch (err) {
     if (isActiveAuthOwner(userId)) rememberOAuthRefreshFailure(profileId, prof, userId);
     throw err;
@@ -2605,10 +2619,10 @@ export async function testConnection(
   const userId = getActiveUserId();
   const mod = await ca();
   if (!isActiveAuthOwner(userId)) return { ok: false, error: t('errors.model_not_available') };
-  const resolvedModel = EXTERNAL_API_PROVIDERS.includes(pid)
+  const resolvedModel = isExternalApiProvider(pid)
     ? null
     : resolveConfiguredPiModel(mod, pid, selectedModel);
-  if (!EXTERNAL_API_PROVIDERS.includes(pid) && !resolvedModel) {
+  if (!isExternalApiProvider(pid) && !resolvedModel) {
     return { ok: false, error: t('errors.model_not_available') };
   }
 
@@ -2642,7 +2656,7 @@ export async function testConnection(
   // Orkas-side external providers bypass pi-ai's catalog — route directly
   // to their factory so we don't hit the "provider has no models registered"
   // guard below (which relies on pi-ai's listPiModels).
-  if (EXTERNAL_API_PROVIDERS.includes(pid)) {
+  if (isExternalApiProvider(pid)) {
     const modelForTest = selectedModel;
     const t0 = Date.now();
     try {
@@ -2665,7 +2679,7 @@ export async function testConnection(
           ...customConfig,
         });
       } else {
-        throw new Error(`external provider "${pid}" has no test-connection factory yet`);
+        provider = await ext.createConfiguredOpenAICompatibleProvider({ providerId: pid, apiKey, modelId: probeModel });
       }
       if (!isActiveAuthOwner(userId)) return { ok: false, error: t('errors.model_not_available') };
       const msg = await provider.complete({
@@ -2751,4 +2765,72 @@ function rememberOAuthRefreshFailure(profileId: string, prof: OAuthProfile, user
 }
 function clearOAuthRefreshFailure(profileId: string, userId = getActiveUserId()): void {
   if (profileId) oauthRefreshFailures.delete(oauthProfileKey(userId, profileId));
+}
+
+/** Saved entries remain visible for credential/catalog remediation. */
+export async function listSettingsEntries(): Promise<{ entries: EntryView[] }> {
+  return listEntries({ includeUnavailable: true });
+}
+
+function entryHasSmallCustomWindow(store: ProfilesFile, entry: Entry): boolean {
+  if (!providerUsesCustomOpenAIConfig(entry.provider)) return false;
+  const profile = store.profiles[entry.profileId];
+  if (!profile || profile.type !== 'api_key') return false;
+  try {
+    const window = normalizeCustomTokenLimit(profile.contextWindow, DEFAULT_CUSTOM_CONTEXT_WINDOW, 'contextWindow', 1_024);
+    return modelContextWindowBelowMinimum(window);
+  } catch { return false; }
+}
+
+function entryContextWindowTooSmall(store: ProfilesFile, entry: Entry, resolver: RuntimeModelResolver): boolean {
+  return entryHasSmallCustomWindow(store, entry)
+    || (resolver(entry.provider, entry.model, true) && !resolver(entry.provider, entry.model));
+}
+
+export function getConfiguredModelContextWindowMessage(): string | null {
+  const store = loadProfiles();
+  const visible = store.entries.filter(entry => isModelProviderAllowed(entry.provider, entry.model) && !isStoredProfileBlocked(store.profiles[entry.profileId]));
+  return visible.length > 0 && visible.every(entry => entryHasSmallCustomWindow(store, entry))
+    ? t('errors.model_context_too_small', { minimum: MIN_NATIVE_MODEL_CONTEXT_WINDOW }) : null;
+}
+
+/** Only currently executable configured credentials are rotation candidates. */
+export async function listRotationEntries(): Promise<{ entries: EntryView[] }> { return listEntries(); }
+
+function oauthCredentialsFromProfile(prof: OAuthProfile): Record<string, unknown> {
+  return {
+    access: prof.access,
+    refresh: prof.refresh,
+    expires: prof.expires,
+    ...Object.fromEntries(
+      Object.entries(prof).filter(([k]) =>
+        !['type', 'provider', 'label', 'createdAt', 'lastUsed', 'email', 'access', 'refresh', 'expires'].includes(k),
+      ),
+    ),
+  };
+}
+
+async function refreshOAuthProfileAfterAuthFailure(
+  profileId: string,
+  rejectedApiKey: string,
+  userId: string,
+): Promise<string | undefined> {
+  if (!isActiveAuthOwner(userId)) return undefined;
+  const store = loadProfiles({ userId });
+  const prof = store.profiles[profileId];
+  if (!prof || prof.type !== 'oauth') return undefined;
+  try {
+    const oauth = await piOauth();
+    const provider = await oauth.getOAuthProvider(prof.provider);
+    if (!isActiveAuthOwner(userId)) return undefined;
+    if (!isSameOAuthCredential(loadProfiles({ userId }).profiles[profileId], prof)) return undefined;
+    const currentApiKey = provider?.getApiKey(oauthCredentialsFromProfile(prof) as any);
+    if (currentApiKey && currentApiKey !== rejectedApiKey) {
+      clearOAuthRefreshFailure(profileId, userId);
+      return currentApiKey;
+    }
+  } catch {
+    // The real refresh call below owns failure recording and propagation.
+  }
+  return refreshOAuthProfile(profileId, userId);
 }
