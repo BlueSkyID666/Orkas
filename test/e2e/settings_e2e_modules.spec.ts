@@ -26,7 +26,7 @@ test.describe('settings modules and model guard', () => {
     await openSettingsTab(appPage, 'credentials');
     const card = appPage.locator('#settings-orkas-api-group');
     const saving = card.locator('[data-i18n="price_comparison.maximum"]');
-    await expect(saving).toHaveText('Model costs up to ~60% less than provider APIs');
+    await expect(saving).toHaveText('Model costs up to 50% less than provider API pricing');
     await expect(card.locator('#settings-orkas-api-key-input')).toBeVisible();
     // A masked presentation fixture never saves or transmits a credential.
     await appPage.evaluate(() => {
@@ -38,7 +38,7 @@ test.describe('settings modules and model guard', () => {
       await appPage.evaluate(async language => { await (window as any).setLang(language); }, language);
       await expect(saving).toBeVisible();
       if (language === 'zh') {
-        await expect(saving).toHaveText('模型费用较厂商 API 最高节省约 60%');
+        await expect(saving).toHaveText('模型费用较厂商 API 最高省 50%');
         await expect(card.locator('[data-i18n="settings.orkas_api.sub"]'))
           .toHaveText('统一用于 Orkas 模型、搜索、图片、语音、视频和需要积分的连接器。密钥仅加密保存在本机。');
       }

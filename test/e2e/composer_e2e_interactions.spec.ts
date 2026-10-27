@@ -18,7 +18,7 @@ test.describe('persistent sidebar', () => {
 });
 
 test.describe('new chat composer', () => {
-  test('groups both public Orkas API-key models as official models', async ({ appPage, orkas }) => {
+  test('groups both public Orkas API-key models as official models', async ({ appPage, orkas }, testInfo) => {
     const configured = await orkas.invoke<{ ok: boolean; configured: boolean }>(
       'orkasApi.configureAll',
       { apiKey: 'orkas-e2e-public-key-xxxxxxxx' },
@@ -37,17 +37,34 @@ test.describe('new chat composer', () => {
     await expect(officialRows.locator('.composer-model-menu-title-name'))
       .toHaveText(['Orkas-1.5', 'Orkas-1.5 Pro']);
     await expect(officialRows.nth(0).locator('.composer-model-menu-recommended'))
-      .toHaveText('Recommended');
+      .toHaveText('Recommended · up to 50% less');
     await expect(officialRows.nth(0).locator('.composer-model-menu-description'))
-      .toContainText('DeepSeek V4 · GPT-5.6 Luna · Claude-Sonnet-5 · Gemini-3.6 Flash');
+      .toContainText('DeepSeek V4.1 Flash · GPT-6 Luna · Claude-Sonnet-5 · Gemini-3.8 Flash');
     await expect(officialRows.nth(1).locator('.composer-model-menu-description'))
-      .toContainText('GPT-5.6 Sol · Claude Opus 5 · Kimi K3');
+      .toContainText('GPT-6.1 Sol · Claude Opus 5.5 · Kimi K3');
     const customGroup = appPage.locator(
       '.composer-model-menu-group[data-model-group="custom"]',
     );
     await expect(customGroup.locator('.composer-model-menu-group-label'))
       .toHaveText('Bring your own API Key');
+    await expect(customGroup.locator('.composer-model-menu-recommended')).toHaveCount(0);
+    await expect(officialRows.nth(1).locator('.composer-model-menu-recommended')).toHaveCount(0);
+    await officialGroup.screenshot({ path: testInfo.outputPath('official-models-en.png') });
     await appPage.keyboard.press('Escape');
+    await appPage.setViewportSize({ width: 620, height: 900 });
+    await appPage.evaluate(async () => { await (window as any).setLang('zh'); });
+    await modelChip.click();
+    const saving = officialRows.nth(0).locator('.composer-model-menu-recommended');
+    await expect(saving).toHaveText('推荐 · 较厂商 API 最高省 50%');
+    expect(await saving.evaluate(element => {
+      const box = element.getBoundingClientRect();
+      const row = element.closest('.composer-model-menu-item')!.getBoundingClientRect();
+      return box.left >= row.left && box.right <= row.right && element.scrollWidth <= element.clientWidth + 1;
+    })).toBe(true);
+    await officialGroup.screenshot({ path: testInfo.outputPath('official-models-zh-narrow.png') });
+    await appPage.keyboard.press('Escape');
+    await appPage.setViewportSize({ width: 1280, height: 900 });
+    await appPage.evaluate(async () => { await (window as any).setLang('en'); });
 
     await appPage.locator('#settings-btn').click();
     await appPage.locator('.settings-tab[data-settings-tab="credentials"]').click();
@@ -57,6 +74,13 @@ test.describe('new chat composer', () => {
     await expect(settingsOfficialRows).toHaveCount(2);
     await expect(settingsOfficialRows.locator('.entry-model-static-name'))
       .toHaveText(['Orkas-1.5', 'Orkas-1.5 Pro']);
+    await expect(settingsOfficialRows.nth(0).locator('.entry-model-recommended'))
+      .toHaveText('Recommended · up to 50% less');
+    await expect(settingsOfficialRows.nth(0).locator('.entry-included-models'))
+      .toContainText('DeepSeek V4.1 Flash · GPT-6 Luna · Claude-Sonnet-5 · Gemini-3.8 Flash');
+    await expect(settingsOfficialRows.nth(1).locator('.entry-included-models'))
+      .toContainText('GPT-6.1 Sol · Claude Opus 5.5 · Kimi K3');
+    await appPage.locator('#settings-entries').screenshot({ path: testInfo.outputPath('configured-models-en.png') });
   });
 
   test('keeps explicit Commander mentions visible through send and history reload', async ({ modelOrkas }, testInfo) => {

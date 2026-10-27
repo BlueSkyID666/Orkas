@@ -519,10 +519,13 @@ function _buildComposerModelMenuItem(entry, activeEntryId, anchor) {
     ? _composerModelEntryLabel(entry)
     : (_composerModelProviderLabel(entry) || _composerModelEntryLabel(entry));
   title.appendChild(titleName);
-  if (official && entry && entry.recommended === true) {
+  const hasSavings = official && entry.model === 'orkas-llm-1.5';
+  if (official && entry && (entry.recommended === true || hasSavings)) {
     const recommended = document.createElement('span');
     recommended.className = 'composer-model-menu-recommended';
-    recommended.textContent = t('new_chat.model_picker.recommended');
+    recommended.textContent = hasSavings
+      ? t('new_chat.model_picker.recommended_with_savings')
+      : t('new_chat.model_picker.recommended');
     title.appendChild(recommended);
   }
   copy.appendChild(title);

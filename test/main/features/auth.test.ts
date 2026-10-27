@@ -199,7 +199,7 @@ describe('auth › Orkas API quick setup', () => {
         profileLabel: 'Orkas',
         profileMasked: 'orka…xxxx',
         recommended: true,
-        includedModels: ['DeepSeek V4', 'GPT-5.6 Luna', 'Claude-Sonnet-5', 'Gemini-3.6 Flash'],
+        includedModels: ['DeepSeek V4.1 Flash', 'GPT-6 Luna', 'Claude-Sonnet-5', 'Gemini-3.8 Flash'],
       }),
       expect.objectContaining({
         model: 'orkas-llm-1.5-pro',
@@ -207,7 +207,7 @@ describe('auth › Orkas API quick setup', () => {
         official: true,
         profileLabel: 'Orkas',
         profileMasked: 'orka…xxxx',
-        includedModels: ['GPT-5.6 Sol', 'Claude Opus 5', 'Kimi K3'],
+        includedModels: ['GPT-6.1 Sol', 'Claude Opus 5.5', 'Kimi K3'],
       }),
     ]);
     expect((await a.listComposerEntries()).entries).toEqual(

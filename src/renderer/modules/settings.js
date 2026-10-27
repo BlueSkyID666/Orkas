@@ -2203,7 +2203,9 @@ function _settingsRenderEntryRow(entry, priorityIdx) {
   const providerName = entry.providerLabelKey ? t(entry.providerLabelKey) : (entry.providerLabel || entry.provider);
   const isOrkasApi = entry.provider === _ORKAS_API_PROVIDER_ID;
   const recommendedModelTag = isOrkasApi && entry.recommended === true
-    ? `<span class="entry-model-recommended">${escapeHtml(t('settings.orkas_api.recommended'))}</span>`
+    ? `<span class="entry-model-recommended">${escapeHtml(t(entry.model === 'orkas-llm-1.5'
+      ? 'new_chat.model_picker.recommended_with_savings'
+      : 'settings.orkas_api.recommended'))}</span>`
     : '';
   const modelControl = entry.modelEditable === false
     ? `<span class="entry-model-static"><span class="entry-model-static-name">${escapeHtml(entry.modelName || entry.model)}</span>${recommendedModelTag}</span>`
