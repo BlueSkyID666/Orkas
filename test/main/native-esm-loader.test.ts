@@ -16,6 +16,7 @@ beforeEach(() => {
   fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
   fs.copyFileSync(path.join(project, 'bootstrap.cjs'), path.join(root, 'bootstrap.cjs'));
   const helper = path.join(project, 'src/main/util/native-esm-loader.js');
+  fs.copyFileSync(path.join(project, 'src/main/install-data-root.cjs'), path.join(root, 'src/main/install-data-root.cjs'));
   fs.mkdirSync(path.join(root, 'src/main/util'));
   if (fs.existsSync(helper)) fs.copyFileSync(helper, path.join(root, 'src/main/util/native-esm-loader.js'));
   fs.writeFileSync(path.join(dependency, 'package.json'), JSON.stringify({ name: 'fixture', type: 'module', exports: './index.mjs' }));

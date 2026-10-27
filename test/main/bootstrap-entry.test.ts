@@ -43,6 +43,54 @@ afterEach(() => {
 
 describe('desktop bootstrap entry', () => {
   it.each([
+    { platform: 'darwin', defaultApp: true, override: false },
+    { platform: 'linux', defaultApp: true, override: false },
+    { platform: 'darwin', defaultApp: false, override: false },
+    { platform: 'win32', defaultApp: true, override: true },
+  ])('initializes storage before TypeScript or Main can read paths: %j', (scenario) => {
+    const expected = scenario.override ? path.join(root, 'override') : path.join(root, '.orkas', 'data');
+    const env: Record<string, string> = scenario.override ? { ORKAS_WORKSPACE_ROOT: expected } : {};
+    const runtime = { platform: scenario.platform, defaultApp: scenario.defaultApp, env, argv: [], versions: {} };
+    const events: string[] = [];
+    const bootstrap = fs.readFileSync(path.join(root, 'bootstrap.cjs'), 'utf8');
+    runInNewContext(bootstrap, {
+      __dirname: root, process: runtime,
+      require(name: string) {
+        if (name === 'node:fs') return fs;
+        if (name === 'node:path') return path;
+        if (name === './src/main/install-data-root.cjs') {
+          const module = { exports: {} };
+          runInNewContext(fs.readFileSync(path.resolve('src/main/install-data-root.cjs'), 'utf8'), {
+            module, exports: module.exports, process: runtime,
+            require(dependency: string) {
+              if (dependency === 'node:fs') return fs;
+              if (dependency === 'node:path') return path;
+              if (dependency === 'node:os') return { homedir: () => root };
+              if (dependency === 'node:child_process') return { execFileSync() { throw new Error('Unexpected host probe'); } };
+              if (dependency === './util/migrate-source-data-root.cjs') return { migrateSourceDataRoot() {} };
+              throw new Error(`Unexpected install-root import: ${dependency}`);
+            },
+          });
+          return module.exports;
+        }
+        if (name === 'tsx/cjs' || name === './src/main') {
+          // Both TypeScript loaders and newly added Main imports may read paths
+          // immediately. No test setup workspace override may hide a cold boot.
+          expect(env.ORKAS_WORKSPACE_ROOT).toBe(expected);
+          if (!scenario.override) expect(fs.statSync(expected).isDirectory()).toBe(true);
+          events.push(name);
+          return {};
+        }
+        if (name === 'tsx/esm/api') return { register() {} };
+        if (name === './src/main/util/native-esm-loader.js') return { registerNativeEsmLoader() {} };
+        throw new Error(`Unexpected bootstrap import: ${name}`);
+      },
+    });
+    expect(events).toEqual(['tsx/cjs', './src/main']);
+    if (scenario.override) expect(fs.existsSync(path.join(root, '.orkas'))).toBe(false);
+  });
+
+  it.each([
     { platform: 'darwin', defaultApp: true, hide: '1', accessory: true },
     { platform: 'darwin', defaultApp: true, hide: '0', accessory: false },
     { platform: 'darwin', defaultApp: true, hide: '', accessory: false },
@@ -60,6 +108,7 @@ describe('desktop bootstrap entry', () => {
         if (name === 'node:fs') return fs;
         if (name === 'node:path') return path;
         if (name === 'electron') return { app: { setActivationPolicy: (policy: string) => events.push(policy) } };
+        if (name === './src/main/install-data-root.cjs') return {};
         if (name === 'tsx/cjs') return {};
         if (name === 'tsx/esm/api') return { register() {} };
         if (name === './src/main/util/native-esm-loader.js') return { registerNativeEsmLoader() {} };
