@@ -25,7 +25,6 @@ function loadContextsScript() {
     path.join(__dirname, '../../src/renderer/modules/contexts.js'),
     'utf8',
   );
-  const monitorError = vi.fn();
   const log = { error: vi.fn(), info: vi.fn(), warn: vi.fn() };
   const context: any = {
     AbortController,
@@ -39,10 +38,7 @@ function loadContextsScript() {
     t: (key: string, vars?: Record<string, unknown>) => `${key}:${JSON.stringify(vars || {})}`,
     window: {
       addEventListener: vi.fn(),
-      Monitor: { error: monitorError },
     },
-    Monitor: { error: monitorError },
-    __monitorError: monitorError,
     document: {
       addEventListener: vi.fn(),
       body: {},
@@ -104,15 +100,33 @@ function dropEvent(dataTransfer: any, closestEntry: any = null) {
 }
 
 describe('Library external file drag-and-drop', () => {
-  it.each(['rename-file', 'rename-dir', 'move'])(
-    'keeps save, draft and reveal paths current after %s', async (action) => {
+  it('retains hidden and collapsed file status without rebuilding the tree for every event', () => {
+    const context = loadContextsScript();
+    context.currentView = 'new-chat';
+    context.renderCtxTree = vi.fn();
+    context._scheduleKbStatusRefreshIfNeeded = vi.fn();
+    for (let i = 0; i < 100; i += 1) {
+      context._applyKbEvent({ relPath: `collapsed/file-${i}.md`, status: 'ready', chunks: i });
+    }
+    expect(context.renderCtxTree).not.toHaveBeenCalled();
+    expect(vm.runInContext('_kbStatusByPath["collapsed/file-99.md"]', context)).toMatchObject({ status: 'ready', chunks: 99 });
+    context.currentView = 'contexts';
+    context._applyKbEvent({ relPath: 'collapsed/file-99.md', status: 'failed', error: 'unavailable' });
+    expect(context.renderCtxTree).not.toHaveBeenCalled();
+    expect(context._kbStatusChipHtml('collapsed/file-99.md')).toContain('failed');
+  });
+  it.each(['', 'project-a'].flatMap((projectId) =>
+    ['rename-file', 'rename-dir', 'move'].map((action) => ({ projectId, action }))))(
+    'keeps save, draft and reveal paths current after $action in scope "$projectId"', async ({ projectId, action }) => {
       const context = loadContextsScript();
       vm.runInContext(fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/md-view-edit.js'), 'utf8'), context);
-      vm.runInContext('_ctxActive = { id: "notes/draft.md" };', context);
+      context.__projectId = projectId;
+      vm.runInContext('_ctxProjectId = __projectId; _ctxActive = { id: "notes/draft.md" };', context);
       context._prepCtxViewerShell = () => ({ bodyEl: {}, actionsEl: {} });
       context.loadContexts = vi.fn();
       context.revealCtxFile = vi.fn();
       context.apiFetch = vi.fn(async () => ({ json: async () => ({ ok: true }) }));
+      context.apiLibraryFetch = vi.fn(async () => ({ json: async () => ({ ok: true }) }));
       context.window.orkas = { invoke: vi.fn(async () => ({ ok: true })) };
       // Only the editor DOM is replaced. Save uses its real source dispatcher.
       let controller: any;
@@ -135,11 +149,13 @@ describe('Library external file drag-and-drop', () => {
       else await context._commitInlineRename(action === 'rename-dir' ? 'notes' : 'notes/draft.md', action === 'rename-dir' ? 'archive' : 'final.md');
       expect(vm.runInContext('_ctxActive.id', context)).toBe(next);
       callbacks.onDraftChange({ content: 'After rename', dirty: false });
-      expect([...vm.runInContext('_ctxDrafts.entries()', context)]).toEqual([[next, { content: 'After rename', dirty: false }]]);
+      callbacks.onDirtyChange(true);
+      expect([...vm.runInContext('_ctxDrafts.entries()', context)]).toEqual([[next, { content: 'After rename', dirty: true }]]);
       callbacks.onReveal();
       expect(context.revealCtxFile).toHaveBeenCalledWith(next);
       expect(await controller.save('After rename')).toEqual({ ok: true });
-      expect(context.apiFetch).toHaveBeenCalledWith('/api/contexts/update', expect.objectContaining({ body: JSON.stringify({ path: next, content: 'After rename' }) }));
+      if (projectId) expect(context.window.orkas.invoke).toHaveBeenCalledWith('projects.files.updateText', { projectId, name: next, content: 'After rename' });
+      else expect(context.apiFetch).toHaveBeenCalledWith('/api/contexts/update', expect.objectContaining({ body: JSON.stringify({ path: next, content: 'After rename' }) }));
       callbacks.onDraftChange(null);
       expect(vm.runInContext('_ctxDrafts.size', context)).toBe(0);
     },
@@ -150,7 +166,7 @@ describe('Library external file drag-and-drop', () => {
 
     expect(context._applyKbStatusResult({ summary: { ready: 0 }, files: [] })).toBe(true);
     expect(context._kbUnavailableHtml()).toBe('');
-    expect(context.__monitorError).not.toHaveBeenCalled();
+    expect(context.__log.error).not.toHaveBeenCalled();
   });
 
   it('keeps files usable and exposes storage-full recovery guidance when KB startup fails', () => {
@@ -169,10 +185,11 @@ describe('Library external file drag-and-drop', () => {
     expect(context._applyKbStatusResult({
       ok: false,
       code: rawCode,
-      error: '/Users/test/private/vector.db is full',
+      error: '/fixture/private/vector.db is full',
     })).toBe(false);
 
     expect(context._kbUnavailableHtml()).toContain('contexts.kb.storage_full');
+    expect(context._kbUnavailableHtml()).not.toContain('/fixture/private');
   });
 
   it('does not duplicate a rejected invoke already owned by the IPC diagnostic', () => {
@@ -181,7 +198,7 @@ describe('Library external file drag-and-drop', () => {
     expect(context._applyKbStatusResult({ ok: false, error: 'ipc request failed' })).toBe(false);
 
     expect(context._kbUnavailableHtml()).toContain('contexts.kb.unavailable');
-    expect(context.__monitorError).not.toHaveBeenCalled();
+    expect(context.__log.error).not.toHaveBeenCalled();
   });
 
   it('renders a native vectorization failure as a generic clickable retry action', async () => {
@@ -417,6 +434,18 @@ describe('Library external file drag-and-drop', () => {
     expect(zh['contexts.upload_rejected']).toBe('这些文件暂不支持，未添加到资料库：\n{list}');
   });
 
+  it('uploads legacy XLS through the Library renderer admission check', async () => {
+    const context = loadContextsScript();
+    const file = { name: 'inventory.XLS', size: 4, arrayBuffer: vi.fn(async () => new ArrayBuffer(4)) };
+    context.apiFetch = vi.fn(async () => ({ json: async () => ({ ok: true }) }));
+    context.loadContexts = vi.fn(async () => undefined);
+    context.uiAlert = vi.fn(async () => undefined);
+    await context.handleCtxUpload([file], 'Research');
+    expect(file.arrayBuffer).toHaveBeenCalledOnce();
+    expect(context.apiFetch).toHaveBeenCalledWith('/api/contexts/upload', expect.anything());
+    expect(context.uiAlert).not.toHaveBeenCalled();
+  });
+
   it('bounds and completes a large multi-file upload action', async () => {
     const context = loadContextsScript();
     context.uiAlert = vi.fn(async () => undefined);
@@ -519,10 +548,6 @@ describe('Library external file drag-and-drop', () => {
 
   it('keeps one successful delete result when the post-mutation refresh fails', async () => {
     const context = loadContextsScript();
-    const event = vi.fn();
-    const error = vi.fn();
-    context.window.Monitor = {};
-    context.Monitor = { event, error };
     context.uiConfirm = vi.fn(async () => true);
     context.uiAlert = vi.fn(async () => undefined);
     context.apiFetch = vi.fn(async () => ({ json: async () => ({ ok: true }) }));
@@ -532,17 +557,11 @@ describe('Library external file drag-and-drop', () => {
 
     expect(context.apiFetch).toHaveBeenCalledOnce();
     expect(context.loadContexts).toHaveBeenCalledOnce();
-    expect(event).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
     expect(context.uiAlert).not.toHaveBeenCalled();
   });
 
   it('treats a resolved native IPC rejection as failure instead of cancellation', async () => {
     const context = loadContextsScript();
-    const event = vi.fn();
-    const error = vi.fn();
-    context.window.Monitor = {};
-    context.Monitor = { click: vi.fn(), event, error };
     context.window.orkas = {
       invoke: vi.fn(async () => ({ ok: false, code: 'E_IPC_REQUEST', error: 'private backend detail' })),
     };
@@ -555,15 +574,44 @@ describe('Library external file drag-and-drop', () => {
     expect(context.uiAlert).toHaveBeenCalledOnce();
     expect(context.__log.warn).toHaveBeenCalledWith('library upload failed', expect.objectContaining({ error_code: 'E_IPC_REQUEST' }));
     expect(JSON.stringify(context.__log.warn.mock.calls)).not.toContain('private backend detail');
-    expect(event).not.toHaveBeenCalled();
   });
 
-  it('keeps explicit native picker cancellation free of error feedback outside the upload success denominator', async () => {
+  it.each(['cancelled', 'rejected', 'throws', 'success'] as const)(
+    'keeps native Library upload in its original scope until %s settles', async outcome => {
+      const context = loadContextsScript();
+      const trigger = { disabled: false };
+      context.document.getElementById = vi.fn((id: string) => id === 'contexts-project-select-trigger' ? trigger : null);
+      let finish!: (value: unknown) => void;
+      let fail!: (error: Error) => void;
+      context.window.orkas = { invoke: vi.fn(() => new Promise((resolve, reject) => { finish = resolve; fail = reject; })) };
+      context.uiAlert = vi.fn(async () => undefined);
+      context.loadContexts = vi.fn(async () => undefined);
+      context._ctxAlertDuplicateUploads = vi.fn(async () => undefined);
+      context._ctxAlertUploadFailures = vi.fn(async () => undefined);
+      vm.runInContext('_ctxProjectId = "project-a";', context);
+      const uploading = context.handleCtxNativeUpload('Research');
+      expect(trigger.disabled).toBe(true);
+      expect(await context.switchCtxProject('project-b')).toBe(false);
+      expect(vm.runInContext('_ctxProjectId', context)).toBe('project-a');
+      expect(context.window.orkas.invoke).toHaveBeenCalledExactlyOnceWith('projects.files.pickAndUpload', {
+        targetDir: 'Research', projectId: 'project-a',
+      });
+      if (outcome === 'throws') fail(new Error('controlled picker failure'));
+      else finish(outcome === 'cancelled' ? { ok: true, cancelled: true }
+        : outcome === 'rejected' ? { ok: false, code: 'E_IPC_REQUEST' }
+        : { ok: true, files: [{ ok: true, name: 'notes.md' }] });
+      await uploading;
+      expect(trigger.disabled).toBe(false);
+      expect(vm.runInContext('_ctxOperations', context)).toBe(0);
+      expect(vm.runInContext('_ctxProjectId', context)).toBe('project-a');
+      if (outcome === 'success') expect(context.loadContexts).toHaveBeenCalledOnce();
+      else expect(context.loadContexts).not.toHaveBeenCalled();
+      expect(context.uiAlert).toHaveBeenCalledTimes(outcome === 'rejected' || outcome === 'throws' ? 1 : 0);
+    },
+  );
+
+  it('keeps explicit native picker cancellation free of error feedback', async () => {
     const context = loadContextsScript();
-    const event = vi.fn();
-    const error = vi.fn();
-    context.window.Monitor = {};
-    context.Monitor = { click: vi.fn(), event, error };
     context.window.orkas = {
       invoke: vi.fn(async () => ({ ok: true, cancelled: true, files: [] })),
     };
@@ -578,11 +626,7 @@ describe('Library external file drag-and-drop', () => {
 
   it('keeps a successful upload result when the later tree refresh fails', async () => {
     const context = loadContextsScript();
-    const event = vi.fn();
-    const error = vi.fn();
     const file = { name: 'stable.md', size: 8 };
-    context.window.Monitor = {};
-    context.Monitor = { click: vi.fn(), event, error };
     context.window.orkas = {
       importLocalFiles: vi.fn(async () => ({ files: [{ ok: true, name: file.name }] })),
     };
@@ -591,6 +635,8 @@ describe('Library external file drag-and-drop', () => {
 
     await context.handleCtxUpload([file], 'Research');
 
+    expect(context.window.orkas.importLocalFiles).toHaveBeenCalledOnce();
+    expect(context.loadContexts).toHaveBeenCalledOnce();
     expect(context.uiAlert).not.toHaveBeenCalled();
   });
 });

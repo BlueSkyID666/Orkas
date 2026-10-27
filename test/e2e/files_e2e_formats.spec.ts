@@ -56,6 +56,8 @@ test('CSV and TSV use the available preview height after resizing and switching 
     }, selector)).toBeLessThanOrEqual(1);
     expect(await body.locator(selector).evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
   };
+  // Keep enough rows and columns to overflow both viewport sizes. Repeating
+  // each cell adds embedding work without strengthening the layout oracle.
   for (const [name, delimiter] of [['height.csv', ','], ['height.tsv', '\t']]) {
     const content = Array.from({ length: 30 }, (_, index) =>
       [String(index + 1), '中文样本', `"${'Wide cell '.repeat(4)}\nSecond line"`,
