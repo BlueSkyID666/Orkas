@@ -64,7 +64,7 @@
   "process.skill.final_imported": "นำเข้าทักษะเสร็จแล้ว สร้างทักษะ {count} รายการ",
   "process.skill.final_no_changes": "ไม่ได้เขียนเนื้อหาทักษะ ตรวจสอบรายละเอียดกระบวนการ",
   "image_gen.no_capable_model": "ยังไม่ได้ตั้งค่าโมเดลที่สร้างภาพได้ โปรดเพิ่มคีย์ OpenAI หรือ Google API (ข้อมูลรับรองแบบสมาชิก/OAuth ใช้สร้างภาพไม่ได้)",
-  "video_gen.no_capable_model": "เพิ่มคีย์ API ของผู้ให้บริการวิดีโอที่รองรับในการตั้งค่า",
+  "video_gen.no_capable_model": "ยังไม่ได้ตั้งค่าผู้ให้บริการสร้างวิดีโอ เพิ่ม Orkas API หรือคีย์ API ของผู้ให้บริการที่รองรับใน การตั้งค่า > การกำหนดค่า",
   "oauth.minimax.requesting": "กำลังขออนุญาตจาก MiniMax…",
   "oauth.minimax.waiting": "กำลังรอการอนุญาตจาก MiniMax ให้เสร็จสมบูรณ์…",
   "oauth.minimax.instructions": "ป้อนรหัสต่อไปนี้ในหน้าที่เปิดขึ้น:\n\n    {code}\n\nหลังอนุญาตแล้ว Orkas จะดำเนินการต่อโดยอัตโนมัติ คุณไม่ต้องทำอะไรเพิ่มเติม",

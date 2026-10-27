@@ -64,7 +64,7 @@
   "process.skill.final_imported": "Importación de habilidades completada. Habilidades creadas: {count}.",
   "process.skill.final_no_changes": "No se escribió contenido de habilidades. Revisa los detalles del proceso.",
   "image_gen.no_capable_model": "No hay ningún modelo configurado que pueda generar imágenes. Añade una clave de API de OpenAI o Google (las credenciales de suscripción/OAuth no permiten generar imágenes).",
-  "video_gen.no_capable_model": "No hay ningún servicio de generación de video configurado. Configura la API de Orkas en Configuración.",
+  "video_gen.no_capable_model": "No hay ningún proveedor de generación de video configurado. Añade Orkas API o una clave de API de un proveedor compatible en Configuración > Config.",
   "oauth.minimax.requesting": "Solicitando autorización a MiniMax…",
   "oauth.minimax.waiting": "Esperando a que se complete la autorización de MiniMax…",
   "oauth.minimax.instructions": "Introduce el siguiente código en la página abierta:\n\n    {code}\n\nTras autorizar, Orkas continuará automáticamente. No tienes que hacer nada.",

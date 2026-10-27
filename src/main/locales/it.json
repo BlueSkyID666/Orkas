@@ -64,7 +64,7 @@
   "process.skill.final_imported": "Importazione completata. Abilità create: {count}.",
   "process.skill.final_no_changes": "Nessun contenuto dell'abilità è stato scritto. Controlla i dettagli del processo.",
   "image_gen.no_capable_model": "Nessun modello per la generazione di immagini configurato. Aggiungi una chiave API OpenAI o Google (le credenziali di abbonamento/OAuth non consentono di generare immagini).",
-  "video_gen.no_capable_model": "Nessun servizio di generazione video configurato. Configura l’API Orkas nelle impostazioni.",
+  "video_gen.no_capable_model": "Nessun fornitore per la generazione di video configurato. Aggiungi Orkas API o una chiave API di un fornitore supportato in Impostazioni > Configurazione.",
   "oauth.minimax.requesting": "Richiesta di autorizzazione a MiniMax…",
   "oauth.minimax.waiting": "In attesa del completamento dell'autorizzazione MiniMax…",
   "oauth.minimax.instructions": "Inserisci questo codice nella pagina aperta:\n\n    {code}\n\nDopo l'autorizzazione, Orkas continuerà automaticamente. Non devi fare altro.",

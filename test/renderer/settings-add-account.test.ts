@@ -116,6 +116,10 @@ function loadSettingsClickHarness(
     'settings-image-add-btn',
     'settings-image-status',
     'settings-image-entries',
+    'settings-video-provider',
+    'settings-video-key-input',
+    'settings-video-add-btn',
+    'settings-video-status',
     'settings-video-entries',
     'settings-tts-entries',
   ]) {
@@ -210,7 +214,7 @@ function loadSettingsClickHarness(
   return { context, elements, indexHtml, settingsSource: source, invoke, monitor, selects };
 }
 
-it.each(['anthropic'])('submits the %s protocol picker selection without losing a gateway prefix', async protocol => {
+it.each(['anthropic', 'responses'])('submits the %s protocol picker selection without losing a gateway prefix', async protocol => {
   const { context, elements, invoke, selects } = loadSettingsClickHarness();
   const body = elements.get('add-account-body')!;
   for (const [selector, value] of Object.entries({
@@ -222,6 +226,7 @@ it.each(['anthropic'])('submits the %s protocol picker selection without losing 
   context._settingsShowCustomModelForm({ id: 'custom', label: 'Custom' });
   const protocolPicker = selects.get(body.querySelector('.custom-protocol-input')!);
   expect(protocolPicker.getValue()).toBe('openai');
+  expect(protocolPicker.getOptions().map((option: {value: string}) => option.value)).toContain(protocol);
   protocolPicker.emitChange(protocol);
   expect(body.querySelector('.custom-base-url-input')!.placeholder).toBe(protocol === 'anthropic' ? 'https://api.example.com' : 'https://api.example.com/v1');
   await elements.get('add-account-actions')!.children.at(-1)!.click();
@@ -232,6 +237,42 @@ it.each(['anthropic'])('submits the %s protocol picker selection without losing 
 });
 
 describe('settings model authorization add account', () => {
+  it.each(['doubao-seedance-2-0-fast-260128', 'doubao-seedance-2-0-mini'])('preserves a flattened video model choice through the real add button: %s', async (model) => {
+    const option = { id: `doubao:${model}`, provider: 'doubao', model, label: `DouBao · ${model}` };
+    const { context, elements, invoke } = loadSettingsClickHarness(async (channel) => (
+      channel === 'videoAuth.list' ? { ok: true, profiles: [], providers: [option] } : { ok: true }
+    ));
+    elements.get('settings-video-key-input')!.value = 'fixture-video-key';
+    await context._settingsRefreshVideoProfiles();
+    context._settingsRenderVideoPicker();
+    context.__selected = option.id;
+    vm.runInContext('_settingsState.videoProviderSel.setValue(__selected)', context);
+    await elements.get('settings-video-add-btn')!.click();
+    expect(invoke).toHaveBeenCalledWith('videoAuth.add', { provider: 'doubao', model, apiKey: 'fixture-video-key', label: 'default' });
+    expect(elements.get('settings-video-key-input')!.value).toBe('');
+  });
+
+  it('does not submit an unknown video option or lose its entered key', async () => {
+    const { context, elements, invoke } = loadSettingsClickHarness();
+    elements.get('settings-video-key-input')!.value = 'fixture-video-key';
+    context._settingsRenderVideoPicker();
+    vm.runInContext("_settingsState.videoProviderSel.setValue('doubao:unknown-model')", context);
+    await elements.get('settings-video-add-btn')!.click();
+    expect(invoke.mock.calls.some(([channel]) => channel === 'videoAuth.add')).toBe(false);
+    expect(elements.get('settings-video-key-input')!.value).toBe('fixture-video-key');
+  });
+
+  it('labels saved video models by their provider/model pair', async () => {
+    const { context } = loadSettingsClickHarness(async (channel) => (
+      channel === 'videoAuth.list' ? { ok: true, profiles: [], providers: [
+        { id: 'doubao:standard', provider: 'doubao', model: 'standard', label: 'DouBao · Standard' },
+        { id: 'doubao:fast', provider: 'doubao', model: 'fast', label: 'DouBao · Fast' },
+      ] } : { ok: true }
+    ));
+    await context._settingsRefreshVideoProfiles();
+    expect(context._videoProviderLabel('doubao', 'fast')).toBe('DouBao · Fast');
+  });
+
   it('uses the model options returned by imageAuth and preserves the selected model on save', async () => {
     const model = 'doubao-seedream-5-0-pro-260628';
     const option = { id: `doubao:${model}`, provider: 'doubao', model, label: 'DouBao · Seedream 5.0 Pro' };
@@ -1083,4 +1124,23 @@ it('does not undo the first completed OAuth entry when a duplicate completion wo
     await Promise.all(pending); await new Promise(resolve => setTimeout(resolve, 0));
     await elements.get('oauth-flow-close-btn')!.click(); active.clear();
   }
+});
+
+
+describe('legacy context capacity remediation', () => {
+  it('keeps a too-small saved model visible and removable without ranking or reordering it', () => {
+    const { context } = loadSettingsClickHarness();
+    const row = context._settingsRenderEntryRow({
+      entryId: 'legacy-small', provider: 'custom', model: 'old-small',
+      profileId: 'profile-small', modelEditable: false,
+      availability: 'context_too_small', availabilityReason: 'Choose a model with at least 32000 tokens.',
+    }, null);
+    expect(row.draggable).toBe(false);
+    expect(row.children.some((child: FakeElement) => child.className === 'entry-sort')).toBe(false);
+    expect(row.children.find((child: FakeElement) => child.className === 'entry-rank')?.textContent).toBe('');
+    const main = row.children.find((child: FakeElement) => child.className === 'entry-main');
+    expect(main?.children.some((child: FakeElement) => child.textContent === 'Choose a model with at least 32000 tokens.')).toBe(true);
+    const actions = row.children.find((child: FakeElement) => child.className === 'entry-actions');
+    expect(actions?.children.some((child: FakeElement) => child.className === 'icon-btn danger')).toBe(true);
+  });
 });

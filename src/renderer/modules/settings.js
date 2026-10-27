@@ -1665,7 +1665,7 @@ function _settingsNormalizeCustomBaseUrl(value, protocol) {
     const url = new URL(raw);
     // Main owns Anthropic suffix conversion; sending its canonical result
     // through that boundary again can remove part of a gateway prefix.
-    if (protocol === 'anthropic') return raw;
+    if (protocol === 'anthropic' || protocol === 'responses') return raw;
     const chatPathIndex = url.pathname.search(/\/chat(?:\/|$)/i);
     if (chatPathIndex >= 0) {
       url.pathname = url.pathname.slice(0, chatPathIndex).replace(/\/+$/, '') || '/';
@@ -1680,7 +1680,7 @@ function _settingsBuildCustomModelPayload(values) {
   const maxTokens = String(values.maxTokens ?? '').trim();
   return {
     label: String(values.label || '').trim(),
-    protocol: values.protocol === 'anthropic' ? 'anthropic' : 'openai',
+    protocol: values.protocol === 'anthropic' ? 'anthropic' : values.protocol === 'responses' ? 'responses' : 'openai',
     baseUrl: _settingsNormalizeCustomBaseUrl(values.baseUrl, values.protocol),
     model: String(values.model || '').trim(),
     apiKey: String(values.apiKey || '').trim(),
@@ -1742,6 +1742,7 @@ function _settingsShowCustomModelForm(provider) {
   const protocolSelect = _aiSelectMount(protocolInput, {
     options: [
       { value: 'openai', label: t('settings.custom.protocol_openai') },
+      { value: 'responses', label: t('settings.custom.protocol_responses') },
       { value: 'anthropic', label: t('settings.custom.protocol_anthropic') },
     ],
     value: 'openai',
@@ -2125,8 +2126,15 @@ function _settingsRenderEntries() {
   const displayedEntries = _settingsState.entries.filter((entry) => (
     entry && entry.profileType !== 'managed'
   ));
-  displayedEntries.forEach((entry, idx) => {
-    container.appendChild(_settingsRenderEntryRow(entry, idx));
+  const orderedEntries = [
+    ...displayedEntries.filter(entry => entry.availability !== 'context_too_small'),
+    ...displayedEntries.filter(entry => entry.availability === 'context_too_small'),
+  ];
+  let priorityIdx = 0;
+  orderedEntries.forEach(entry => {
+    const blocked = entry.availability === 'context_too_small';
+    container.appendChild(_settingsRenderEntryRow(entry, blocked ? null : priorityIdx));
+    if (!blocked) priorityIdx += 1;
   });
 }
 
@@ -2148,6 +2156,9 @@ function _settingsEntryModelState(entry, list) {
 }
 
 function _settingsEntryProblem(entry) {
+  if (entry.availability === 'context_too_small' && entry.availabilityReason) {
+    return entry.availabilityReason;
+  }
   if (entry.profileAvailable === false) {
     return t('settings.entries.credential_missing');
   }
@@ -2187,14 +2198,15 @@ async function _settingsUpdateEntryModel(entry, model, modelSel) {
 }
 
 function _settingsRenderEntryRow(entry, priorityIdx) {
+  const capacityBlocked = entry.availability === 'context_too_small';
   const row = document.createElement('div');
   row.className = 'entry-row' + (priorityIdx === 0 ? ' is-default' : '');
   row.dataset.entryId = entry.entryId;
-  row.draggable = true;
+  row.draggable = !capacityBlocked;
 
   const rank = document.createElement('div');
   rank.className = 'entry-rank';
-  rank.textContent = priorityIdx === 0
+  rank.textContent = capacityBlocked ? '' : priorityIdx === 0
     ? t('settings.entries.default_tag')
     : `#${priorityIdx + 1}`;
   row.appendChild(rank);
@@ -2307,10 +2319,12 @@ function _settingsRenderEntryRow(entry, priorityIdx) {
 
   row.appendChild(actions);
 
-  _settingsAttachReorderDnd(row, {
+  if (!capacityBlocked) _settingsAttachReorderDnd(row, {
     kind: 'chat',
     id: entry.entryId,
-    getIds: () => _settingsState.entries.map((e) => e.entryId),
+    getIds: () => _settingsState.entries
+      .filter(entry => entry.availability !== 'context_too_small')
+      .map(entry => entry.entryId),
     ipcName: 'auth.reorderEntries',
     onSuccess: (res) => {
       _settingsState.entries = Array.isArray(res.entries) ? res.entries : _settingsState.entries;
@@ -2681,10 +2695,14 @@ function _settingsRenderSearchEntries() {
 // still persists provider=doubao plus the selected model id.
 
 const _IMAGE_PROVIDER_OPTIONS = [
-  { id: 'orkas-api', label: _settingsOrkasServiceLabel('Image'), docs: _ORKAS_API_KEYS_URL },
-  { id: 'openai',  label: 'OpenAI · GPT Image 2', docs: 'https://platform.openai.com/api-keys' },
-  { id: 'google',  label: 'Google · Nano Banana 2', docs: 'https://aistudio.google.com/app/apikey' },
-  { id: 'doubao',  label: 'DouBao · Seedream', docs: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey' },
+  { id: 'orkas-api', provider: 'orkas-api', model: 'orkas-image', label: _settingsOrkasServiceLabel('Image'), docs: _ORKAS_API_KEYS_URL },
+  {"id": "openai:gpt-image-2", "label": "OpenAI · GPT Image 2", "docs": "https://platform.openai.com/api-keys", "provider": "openai", "model": "gpt-image-2"},
+  {"id": "openai:gpt-image-2.5-flare", "label": "OpenAI · GPT Image 2.5 Flare", "docs": "https://platform.openai.com/api-keys", "provider": "openai", "model": "gpt-image-2.5-flare"},
+  {"id": "openai:gpt-image-2.5-sunburst", "label": "OpenAI · GPT Image 2.5 Sunburst", "docs": "https://platform.openai.com/api-keys", "provider": "openai", "model": "gpt-image-2.5-sunburst"},
+  {"id": "google:gemini-nano-banana-2.1", "label": "Google · Nano Banana 2.1", "docs": "https://aistudio.google.com/app/apikey", "provider": "google", "model": "gemini-nano-banana-2.1"},
+  {"id": "google:gemini-3.1-flash-image-preview", "label": "Google · Nano Banana 2", "docs": "https://aistudio.google.com/app/apikey", "provider": "google", "model": "gemini-3.1-flash-image-preview"},
+  {"id": "doubao:doubao-seedream-5-0-flash-260915", "label": "DouBao · Seedream 5.0 Flash", "docs": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey", "provider": "doubao", "model": "doubao-seedream-5-0-flash-260915"},
+  {"id": "doubao:doubao-seedream-5-0-pro-260628", "label": "DouBao · Seedream 5.0 Pro", "docs": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey", "provider": "doubao", "model": "doubao-seedream-5-0-pro-260628"},
 ];
 
 function _imageProviderLabel(provider, model) {
@@ -2829,10 +2847,18 @@ function _settingsRenderImageEntries() {
 // ── Video generation API key section ────────────────────────────────────
 //
 // Dedicated BYO video-generation credentials. The open-source build exposes
-// User-owned provider keys only; bundled video providers stay stripped.
+// User-owned provider keys only; account-managed providers stay stripped.
 
 const _VIDEO_AUTH_PROVIDER_OPTIONS = [
-  { id: 'orkas-api', label: _settingsOrkasServiceLabel('Video'), docs: _ORKAS_API_KEYS_URL },
+  { id: 'orkas-api', provider: 'orkas-api', model: 'orkas-video', label: _settingsOrkasServiceLabel('Video'), docs: _ORKAS_API_KEYS_URL },
+  {"id": "doubao:doubao-seedance-2-0-260128", "label": "DouBao · Seedance 2.0", "docs": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey", "provider": "doubao", "model": "doubao-seedance-2-0-260128"},
+  {"id": "doubao:doubao-seedance-2-0-fast-260128", "label": "DouBao · Seedance 2.0 Fast", "docs": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey", "provider": "doubao", "model": "doubao-seedance-2-0-fast-260128"},
+  {"id": "doubao:doubao-seedance-2-0-mini", "label": "DouBao · Seedance 2.0 Mini", "docs": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey", "provider": "doubao", "model": "doubao-seedance-2-0-mini"},
+  {"id": "minimax", "label": "MiniMax · Hailuo 2.3", "docs": "https://platform.minimax.io/user-center/basic-information/interface-key", "provider": "minimax", "model": "MiniMax-Hailuo-2.3"},
+  {"id": "vidu", "label": "Vidu · Q3 Pro", "docs": "https://platform.vidu.com/", "provider": "vidu", "model": "viduq3-pro"},
+  {"id": "kling", "label": "Kling · 3.0 Turbo", "docs": "https://kling.ai/global/dev", "provider": "kling", "model": "kling-v3-0-turbo"},
+  {"id": "google", "label": "Google · Veo 3.1", "docs": "https://aistudio.google.com/app/apikey", "provider": "google", "model": "veo-3.1-generate-preview"},
+  {"id": "runway", "label": "Runway · Gen-4.5", "docs": "https://dev.runwayml.com/", "provider": "runway", "model": "gen4.5"},
 ];
 
 function _settingsVideoProviderOptions() {
@@ -2841,9 +2867,16 @@ function _settingsVideoProviderOptions() {
     : _VIDEO_AUTH_PROVIDER_OPTIONS;
 }
 
-function _videoProviderLabel(id) {
-  const hit = _settingsVideoProviderOptions().find((p) => p.id === id);
-  return hit ? hit.label : id;
+function _videoProviderLabel(provider, model) {
+  const hit = _settingsVideoProviderOptions().find((option) => (
+    (option.provider || option.id) === provider
+    && (!model || !option.model || option.model === model)
+  ));
+  return hit ? hit.label : provider;
+}
+
+function _videoProviderOption(id) {
+  return _settingsVideoProviderOptions().find((option) => option.id === id) || null;
 }
 
 function _settingsSelectedVideoProvider() {
@@ -2894,14 +2927,17 @@ function _settingsRenderVideoPicker() {
 }
 
 async function _settingsClickAddVideoKey() {
-  const provider = _settingsSelectedVideoProvider();
+  const option = _videoProviderOption(_settingsSelectedVideoProvider());
+  const provider = option?.provider || option?.id || '';
+  const model = option?.model || '';
   const input = document.getElementById('settings-video-key-input');
   const apiKey = (input?.value || '').trim();
   if (!provider) { _settingsSetStatus('settings-video-status', 'error', t('settings.video.error_provider_needed')); return; }
+  if (!model && provider !== _ORKAS_API_PROVIDER_ID) { _settingsSetStatus('settings-video-status', 'error', t('settings.video.error_model_needed')); return; }
   if (!apiKey) { _settingsSetStatus('settings-video-status', 'error', t('settings.video.error_key_needed')); return; }
   _settingsSetStatus('settings-video-status', 'busy', t('settings.video.adding'));
   try {
-    const res = await window.orkas.invoke('videoAuth.add', { provider, apiKey, label: 'default' });
+    const res = await window.orkas.invoke('videoAuth.add', { provider, model, apiKey, label: 'default' });
     if (!res || !res.ok) {
       _settingsSetStatus('settings-video-status', 'error', (res && res.error) || t('settings.video.add_failed'));
       return;
@@ -2945,7 +2981,7 @@ function _settingsRenderVideoEntries() {
     const isOrkasApi = p.provider === _ORKAS_API_PROVIDER_ID;
     const providerLabel = isOrkasApi
       ? _settingsOrkasServiceLabel('Video')
-      : _videoProviderLabel(p.provider);
+      : _videoProviderLabel(p.provider, p.model);
     primary.innerHTML = `
       <span class="entry-provider">${escapeHtml(providerLabel)}</span>
       <span class="entry-sep">·</span>

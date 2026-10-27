@@ -1605,6 +1605,7 @@
   "settings.custom.compat_hint": "Choose the protocol supported by your gateway. For Anthropic, enter the server base URL, including any gateway prefix.",
   "settings.custom.protocol": "Protocol",
   "settings.custom.protocol_openai": "OpenAI-compatible",
+  "settings.custom.protocol_responses": "OpenAI Responses",
   "settings.custom.protocol_anthropic": "Anthropic-compatible",
   "settings.custom.label": "Label (optional)",
   "settings.custom.label_placeholder": "For example: company gateway",

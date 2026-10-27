@@ -64,7 +64,7 @@
   "process.skill.final_imported": "Beceri içe aktarma tamamlandı. {count} beceri oluşturuldu.",
   "process.skill.final_no_changes": "Hiçbir beceri içeriği yazılmadı. İşlem ayrıntılarını kontrol edin.",
   "image_gen.no_capable_model": "Görsel oluşturabilen bir model yapılandırılmamış. OpenAI veya Google API anahtarı ekleyin (abonelik/OAuth kimlik bilgileriyle görsel oluşturulamaz).",
-  "video_gen.no_capable_model": "Ayarlar bölümünde desteklenen bir video sağlayıcısının API anahtarını ekleyin.",
+  "video_gen.no_capable_model": "Video oluşturma sağlayıcısı yapılandırılmamış. Ayarlar > Yapılandırma bölümünden Orkas API veya desteklenen bir sağlayıcının API anahtarını ekleyin.",
   "oauth.minimax.requesting": "MiniMax yetkilendirmesi isteniyor…",
   "oauth.minimax.waiting": "MiniMax yetkilendirmesinin tamamlanması bekleniyor…",
   "oauth.minimax.instructions": "Açılan sayfaya şu kodu girin:\n\n    {code}\n\nYetkilendirmeden sonra Orkas otomatik olarak devam edecek. Başka bir işlem yapmanız gerekmiyor.",

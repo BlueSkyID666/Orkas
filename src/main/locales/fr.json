@@ -64,7 +64,7 @@
   "process.skill.final_imported": "Importation terminée. Skills créés : {count}.",
   "process.skill.final_no_changes": "Aucun contenu de Skill n’a été écrit. Consultez les détails du processus.",
   "image_gen.no_capable_model": "Aucun modèle capable de générer des images n’est configuré. Ajoutez une clé API OpenAI ou Google (les identifiants d’abonnement/OAuth ne donnent pas accès à la génération d’images).",
-  "video_gen.no_capable_model": "Aucun service de génération vidéo n’est configuré. Configurez l’API Orkas dans les paramètres.",
+  "video_gen.no_capable_model": "Aucun fournisseur de génération vidéo n’est configuré. Ajoutez Orkas API ou une clé API d’un fournisseur compatible dans Paramètres > Configuration.",
   "oauth.minimax.requesting": "Demande d’autorisation auprès de MiniMax…",
   "oauth.minimax.waiting": "En attente de la fin de l’autorisation MiniMax…",
   "oauth.minimax.instructions": "Saisissez le code suivant sur la page ouverte :\n\n    {code}\n\nAprès l’autorisation, Orkas continuera automatiquement. Aucune action n’est requise.",

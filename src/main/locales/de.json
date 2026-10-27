@@ -64,7 +64,7 @@
   "process.skill.final_imported": "Skill-Import abgeschlossen. Erstellte Skills: {count}.",
   "process.skill.final_no_changes": "Es wurde kein Skill-Inhalt geschrieben. Prüfen Sie die Prozessdetails.",
   "image_gen.no_capable_model": "Kein Modell mit Bilderstellung konfiguriert. Fügen Sie einen OpenAI- oder Google-API-Schlüssel hinzu (Abonnement-/OAuth-Zugangsdaten ermöglichen keine Bilderstellung).",
-  "video_gen.no_capable_model": "Kein Dienst für Videoerstellung konfiguriert. Konfigurieren Sie die Orkas API in den Einstellungen.",
+  "video_gen.no_capable_model": "Kein Anbieter für Videoerstellung konfiguriert. Fügen Sie unter Einstellungen > Konfiguration Orkas API oder einen API-Schlüssel eines unterstützten Anbieters hinzu.",
   "oauth.minimax.requesting": "Autorisierung bei MiniMax wird angefragt…",
   "oauth.minimax.waiting": "Wartet auf Abschluss der MiniMax-Autorisierung…",
   "oauth.minimax.instructions": "Geben Sie den folgenden Code auf der geöffneten Seite ein:\n\n    {code}\n\nNach der Autorisierung fährt Orkas automatisch fort. Sie müssen nichts weiter tun.",

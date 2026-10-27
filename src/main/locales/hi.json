@@ -64,7 +64,7 @@
   "process.skill.final_imported": "स्किल आयात पूरा हुआ। {count} स्किल बनाई गईं।",
   "process.skill.final_no_changes": "स्किल की कोई सामग्री नहीं लिखी गई। प्रक्रिया का विवरण देखें।",
   "image_gen.no_capable_model": "चित्र बनाने वाला कोई मॉडल कॉन्फ़िगर नहीं है। OpenAI या Google API कुंजी जोड़ें (सदस्यता/OAuth क्रेडेंशियल से चित्र नहीं बनाए जा सकते)।",
-  "video_gen.no_capable_model": "सेटिंग में समर्थित वीडियो प्रदाता की API कुंजी जोड़ें।",
+  "video_gen.no_capable_model": "वीडियो बनाने वाला कोई प्रदाता कॉन्फ़िगर नहीं है। सेटिंग > कॉन्फ़िगरेशन में Orkas API या समर्थित प्रदाता की API कुंजी जोड़ें।",
   "oauth.minimax.requesting": "MiniMax से प्राधिकरण माँगा जा रहा है…",
   "oauth.minimax.waiting": "MiniMax प्राधिकरण पूरा होने की प्रतीक्षा में…",
   "oauth.minimax.instructions": "खुले हुए पृष्ठ पर यह कोड डालें:\n\n    {code}\n\nप्राधिकरण के बाद Orkas अपने आप आगे बढ़ेगा। आपको कुछ करने की ज़रूरत नहीं है।",

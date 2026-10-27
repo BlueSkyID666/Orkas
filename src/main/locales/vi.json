@@ -64,7 +64,7 @@
   "process.skill.final_imported": "Đã nhập kỹ năng. Đã tạo {count} kỹ năng.",
   "process.skill.final_no_changes": "Chưa ghi nội dung kỹ năng nào. Hãy kiểm tra chi tiết quá trình.",
   "image_gen.no_capable_model": "Chưa cấu hình mô hình có khả năng tạo ảnh. Hãy thêm khóa API OpenAI hoặc Google (thông tin xác thực gói thuê bao/OAuth không hỗ trợ tạo ảnh).",
-  "video_gen.no_capable_model": "Thêm khóa API của nhà cung cấp video được hỗ trợ trong Cài đặt.",
+  "video_gen.no_capable_model": "Chưa cấu hình nhà cung cấp tạo video. Hãy thêm Orkas API hoặc khóa API của nhà cung cấp được hỗ trợ trong Cài đặt > Cấu hình.",
   "oauth.minimax.requesting": "Đang yêu cầu MiniMax cấp quyền…",
   "oauth.minimax.waiting": "Đang chờ hoàn tất cấp quyền MiniMax…",
   "oauth.minimax.instructions": "Nhập mã sau trên trang đã mở:\n\n    {code}\n\nSau khi cấp quyền, Orkas sẽ tự động tiếp tục. Bạn không cần làm gì thêm.",

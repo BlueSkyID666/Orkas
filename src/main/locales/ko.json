@@ -64,7 +64,7 @@
   "process.skill.final_imported": "스킬 가져오기가 완료되었습니다. 스킬 {count}개를 생성했습니다.",
   "process.skill.final_no_changes": "스킬 콘텐츠가 작성되지 않았습니다. 처리 세부 정보를 확인해 주세요.",
   "image_gen.no_capable_model": "이미지를 생성할 수 있는 모델이 설정되지 않았습니다. OpenAI 또는 Google API 키를 추가해 주세요(구독/OAuth 인증 정보로는 이미지 생성을 사용할 수 없습니다).",
-  "video_gen.no_capable_model": "동영상 생성 서비스가 설정되지 않았습니다. 설정에서 Orkas API를 구성해 주세요.",
+  "video_gen.no_capable_model": "동영상 생성 제공업체가 설정되지 않았습니다. 설정 > 구성에서 Orkas API 또는 지원되는 제공업체의 API 키를 추가해 주세요.",
   "oauth.minimax.requesting": "MiniMax에 인증 요청 중…",
   "oauth.minimax.waiting": "MiniMax 인증 완료 대기 중…",
   "oauth.minimax.instructions": "열린 페이지에 다음 코드를 입력해 주세요:\n\n    {code}\n\n인증 후 Orkas가 자동으로 계속 진행합니다. 별도의 조작은 필요하지 않습니다.",

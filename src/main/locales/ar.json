@@ -64,7 +64,7 @@
   "process.skill.final_imported": "اكتمل استيراد المهارات. تم إنشاء {count} مهارة.",
   "process.skill.final_no_changes": "لم يُكتب أي محتوى للمهارة. تحقق من تفاصيل العملية.",
   "image_gen.no_capable_model": "لم يُضبط نموذج قادر على توليد الصور. أضف مفتاح OpenAI أو Google API (لا تتيح بيانات اعتماد الاشتراك/OAuth توليد الصور).",
-  "video_gen.no_capable_model": "أضف مفتاح API لمزوّد فيديو مدعوم في الإعدادات.",
+  "video_gen.no_capable_model": "لم يُضبط مزوّد لتوليد الفيديو. أضف Orkas API أو مفتاح API لمزوّد مدعوم من الإعدادات > الضبط.",
   "oauth.minimax.requesting": "جارٍ طلب التفويض من MiniMax…",
   "oauth.minimax.waiting": "بانتظار اكتمال تفويض MiniMax…",
   "oauth.minimax.instructions": "أدخل الرمز التالي في الصفحة المفتوحة:\n\n    {code}\n\nبعد التفويض، سيتابع Orkas تلقائيًا. لا يلزم اتخاذ أي إجراء.",

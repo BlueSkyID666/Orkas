@@ -64,7 +64,7 @@
   "process.skill.final_imported": "Impor keterampilan selesai. Menciptakan keterampilan {count}.",
   "process.skill.final_no_changes": "Tidak ada konten keterampilan yang ditulis. Periksa detail prosesnya.",
   "image_gen.no_capable_model": "Tidak ada model berkemampuan pembuatan gambar yang dikonfigurasi. Harap tambahkan kunci OpenAI atau Google API (kredensial langganan/OAuth tidak dapat mengakses pembuatan gambar).",
-  "video_gen.no_capable_model": "Tambahkan kunci API penyedia video yang didukung di Pengaturan.",
+  "video_gen.no_capable_model": "Tidak ada penyedia pembuatan video yang dikonfigurasi. Tambahkan Orkas API atau kunci API penyedia yang didukung di Pengaturan > Konfigurasi.",
   "oauth.minimax.requesting": "Meminta otorisasi dari MiniMax...",
   "oauth.minimax.waiting": "Menunggu otorisasi MiniMax untuk menyelesaikan...",
   "oauth.minimax.instructions": "Masukkan kode berikut pada halaman yang terbuka:\n\n{code}\n\nSetelah otorisasi, Orkas akan dilanjutkan secara otomatis. Tidak ada tindakan yang diperlukan.",
