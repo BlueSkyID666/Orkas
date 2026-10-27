@@ -21,7 +21,11 @@ test('keeps image selection, bubble, persisted history and model pixels in order
     const bubbles = page.locator('#chat-history .chat-message.user');
     await expect(bubbles).toHaveCount(turn + 1);
     await expect(bubbles.nth(turn).locator('.chat-msg-attach .chat-attach-label')).toHaveText(names);
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]')).toHaveCount(turn + 1);
+    // Completed history uses the regular message body after hydration, while
+    // live replies use a streaming final slot. Count the visible replies in both.
+    await expect(page.locator('#chat-history .chat-message.assistant', {
+      hasText: 'Hello from the local E2E model.',
+    })).toHaveCount(turn + 1);
     await expect(page.locator('#chat-send-btn')).not.toHaveClass(/\bstreaming\b/);
     await expect.poll(() => modelOrkas.modelRequests.length).toBe(turn + 1);
     const request = modelOrkas.modelRequests[turn] as any;

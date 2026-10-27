@@ -50,7 +50,7 @@ test('keeps saved automation and todo shortcuts usable live and after restart', 
   await expect(page.locator('#project-detail-title')).toHaveText('Release review');
   await page.locator('#project-chat-input').fill('Schedule a nightly review and add a release-note todo.');
   await page.locator('#project-chat-send-btn').click();
-  await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]'))
+  await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])'))
     .toContainText('The tasks have been saved.', { timeout: 30_000 });
   await expect(page.locator('#chat-send-btn')).not.toHaveClass(/\bstreaming\b/);
   const { conversations } = await app.invoke<{

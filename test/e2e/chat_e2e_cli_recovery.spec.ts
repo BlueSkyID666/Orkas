@@ -120,7 +120,11 @@ test.describe('CLI Agent runtime settings', () => {
     const reply = page.locator('#chat-history .chat-message.assistant', {
       hasText: 'E2E_CLI_DEFAULT_OK',
     });
-    await expect(reply.locator('[data-role="final"]')).toBeVisible({ timeout: 30_000 });
+    await expect(reply.locator('.chat-bubble > :is(.markdown-body, [data-role="final"])')).toBeVisible({ timeout: 30_000 });
+    // This scenario inspects a completed task's persisted process output.
+    // A streamed answer can be visible before canonical settlement replaces
+    // the live process rail; wait for the real terminal UI before opening it.
+    await expect(page.locator('#chat-send-btn')).not.toHaveClass(/\bstreaming\b/);
 
     const processRail = reply.locator('.stream-process');
     await expect(processRail).toBeVisible();
@@ -306,7 +310,7 @@ test.describe('CLI Agent runtime settings', () => {
       relaunchedPage,
       `@${agentName} E2E_CODEX_RUNTIME_SETTINGS`,
     );
-    await expect(relaunchedPage.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(relaunchedPage.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CODEX_DEFAULT_OK',
     })).toBeVisible({ timeout: 30_000 });
     const agentReplies = relaunchedPage.locator(
@@ -367,7 +371,7 @@ test.describe('CLI Agent runtime settings', () => {
 
     await defaultPage.locator('#new-chat-btn').click();
     await sendNewChat(defaultPage, `@${agentName} E2E_CODEX_RUNTIME_DEFAULTS`);
-    await expect(defaultPage.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(defaultPage.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CODEX_DEFAULT_OK',
     })).toBeVisible({ timeout: 30_000 });
     const defaultInvocation = cliOrkas.readCliState().invocations.at(-1);
@@ -384,7 +388,7 @@ test.describe('CLI Agent runtime settings', () => {
       const gate = cliOrkas.cliStatePath + '.claude-stream-stage';
       writeFileSync(gate, '0');
       const cid = await sendNewChat(page, `@${name} E2E_CLAUDE_STREAM_BODY`);
-      const body = page.locator('#chat-history .chat-message.assistant [data-role="final"]');
+      const body = page.locator('#chat-history .chat-message.assistant .chat-bubble .markdown-body');
       // The CLI withholds both the full text record and result. A renderer
       // that paints only on completion cannot satisfy either prefix assertion.
       await expect(body).toContainText('First paragraph.', { timeout: 30_000 });
@@ -399,8 +403,10 @@ test.describe('CLI Agent runtime settings', () => {
       await page.screenshot({ path: testInfo.outputPath('claude-streaming-body.png') });
       writeFileSync(gate, '2');
       await expect(page.locator('#chat-send-btn')).not.toHaveClass(/\bstreaming\b/);
-      await expect(body.locator('h2')).toHaveText('Report');
-      await expect(body.locator('p')).toHaveText(['First paragraph.', 'Second paragraph.']);
+      const settledBody = page.locator('#chat-history .chat-message.assistant .chat-bubble')
+        .locator(':scope > .markdown-body, :scope > [data-role="final"] > .markdown-body');
+      await expect(settledBody.locator('h2')).toHaveText('Report');
+      await expect(settledBody.locator('p')).toHaveText(['First paragraph.', 'Second paragraph.']);
       const saved = await cliOrkas.invoke<any>('conversations.history', { cid });
       expect(saved.history.filter((row: any) => row.from === agentId).map((row: any) => row.text))
         .toEqual(['## Report\n\nFirst paragraph.\n\nSecond paragraph.']);
@@ -433,7 +439,7 @@ test.describe('CLI Agent runtime settings', () => {
 
     await page.locator('#new-chat-btn').click();
     await sendNewChat(page, `@${agentName} E2E_CLAUDE_MODEL_ALIAS`);
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CLAUDE_MODEL_RESOLVED',
     })).toBeVisible({ timeout: 30_000 });
     expect(cliOrkas.readCliState().invocations.at(-1)).toMatchObject({
@@ -512,7 +518,7 @@ test.describe('CLI failed-turn recovery', () => {
       const retry = reopened.locator('#chat-history .bubble-retry-btn').last();
       await retry.locator('xpath=ancestor::*[contains(@class, "chat-message")]').hover();
       await retry.click();
-      await expect(reopened.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+      await expect(reopened.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
         hasText: 'E2E_HERMES_FIRST_OK',
       })).toHaveCount(1, { timeout: 30_000 });
       await expect(reopened.locator('#chat-send-btn')).not.toHaveClass(/\bstreaming\b/);
@@ -562,7 +568,7 @@ test.describe('CLI failed-turn recovery', () => {
     await retry.locator('xpath=ancestor::*[contains(@class, "chat-message")]').hover();
     await retry.click();
 
-    await expect(relaunchedPage.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(relaunchedPage.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CLI_RESUMED_WITHOUT_DUPLICATE_TOOL',
     })).toBeVisible({ timeout: 30_000 });
     const recovered = cliOrkas.readCliState();
@@ -575,7 +581,7 @@ test.describe('CLI failed-turn recovery', () => {
   test('drops a stale binding and starts fresh when the failed attempt never established a session', async ({ cliOrkas }) => {
     const { page } = await createCliAgent(cliOrkas, 'OpenCodeRestartE2E', 'opencode');
     const conversationId = await sendNewChat(page, '@OpenCodeRestartE2E E2E_CLI_ESTABLISH_SESSION');
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CLI_SESSION_ESTABLISHED',
     })).toBeVisible({ timeout: 30_000 });
 
@@ -588,7 +594,7 @@ test.describe('CLI failed-turn recovery', () => {
 
     await retry.locator('xpath=ancestor::*[contains(@class, "chat-message")]').hover();
     await retry.click();
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CLI_FRESH_RESTART_OK',
     })).toBeVisible({ timeout: 30_000 });
 
@@ -606,17 +612,46 @@ test.describe('CLI failed-turn recovery', () => {
     });
   });
 
-  test('Hermes always creates a fresh ACP session and receives bridged visible history', async ({ cliOrkas }) => {
+  test('Hermes always creates a fresh ACP session and receives bridged visible history', async ({ cliOrkas }, testInfo) => {
     const { page } = await createCliAgent(cliOrkas, 'HermesHistoryE2E', 'hermes');
     const conversationId = await sendNewChat(page, '@HermesHistoryE2E Remember E2E_HERMES_PRIOR_FACT=blue-orbit');
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble .markdown-body', {
       hasText: 'E2E_HERMES_FIRST_OK',
     })).toBeVisible({ timeout: 30_000 });
 
+    await expect(page.locator('#chat-send-btn')).not.toHaveClass(/\bstreaming\b/);
     await sendFollowUp(page, '@HermesHistoryE2E E2E_HERMES_CONTINUE and use the prior fact');
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
-      hasText: 'E2E_HERMES_HISTORY_BRIDGED',
-    })).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('#chat-send-btn')).not.toHaveClass(/\bstreaming\b/);
+    try {
+      await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble .markdown-body', {
+        hasText: 'E2E_HERMES_HISTORY_BRIDGED',
+      })).toBeVisible({ timeout: 30_000 });
+    } finally {
+      await testInfo.attach('hermes-display-state', {
+        contentType: 'application/json',
+        body: Buffer.from(JSON.stringify(await page.evaluate(`({
+          pending: pendingConvs.has(currentCid), polling: pollTimers.has(currentCid),
+          runtimeBusy: isGroupConversationBusy(currentCid),
+          primaryBusy: _convChatCtrls.get(currentCid)?.isBusy?.() || false,
+          liveFinals: document.querySelectorAll('#chat-history [data-role="final"]').length,
+          assistantRows: document.querySelectorAll('#chat-history .chat-message.assistant').length
+        })`))),
+      });
+      // Observe persistence only after the display assertion, so diagnostics
+      // cannot trigger a history reconciliation that masks the original race.
+      const persisted = await cliOrkas.invoke<{ history: Array<Record<string, any>> }>(
+        'conversations.history', { cid: conversationId, limit: 20 },
+      );
+      await testInfo.attach('hermes-history-state', {
+        contentType: 'application/json',
+        body: Buffer.from(JSON.stringify(persisted.history.map(row => ({
+          user: row.from === 'user', textChars: String(row.text || '').length,
+          expectedReply: row.text === 'E2E_HERMES_HISTORY_BRIDGED',
+          systemKind: row.system_kind || '', turnEnd: row.turn_end,
+          hasSourceMessageId: !!row.source_message_id, segment: row.seg,
+        })))),
+      });
+    }
 
     const state = cliOrkas.readCliState();
     const hermesRuns = state.invocations.filter((item) => item.cli === 'hermes');
@@ -636,7 +671,7 @@ test.describe('CLI failed-turn recovery', () => {
       page,
       `@${agentName} E2E_HERMES_LIMITS_BOOTSTRAP`,
     );
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_HERMES_FIRST_OK',
     })).toBeVisible({ timeout: 30_000 });
 
@@ -666,7 +701,7 @@ test.describe('CLI failed-turn recovery', () => {
     appendCanonicalMessages(cliOrkas, conversationId, rows);
 
     await sendFollowUp(page, `@${agentName} E2E_HERMES_LIMITS_CURRENT_TASK`);
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_HERMES_LIMITS_OK',
     })).toBeVisible({ timeout: 30_000 });
 
@@ -695,7 +730,7 @@ test.describe('CLI failed-turn recovery', () => {
       page,
       `@${agentName} E2E_CODEX_CONTEXT_FIRST_TASK`,
     );
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CODEX_DEFAULT_OK',
     })).toBeVisible({ timeout: 30_000 });
 
@@ -736,7 +771,7 @@ test.describe('CLI failed-turn recovery', () => {
     }).toContain('E2E_CODEX_INTERPOSED_COMMANDER_FACT=blue-river');
 
     await sendFollowUp(page, `@${agentName} E2E_CODEX_CONTEXT_SECOND_TASK`);
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CODEX_DEFAULT_OK',
     })).toHaveCount(2, { timeout: 30_000 });
 
@@ -755,7 +790,7 @@ test.describe('CLI failed-turn recovery', () => {
     const agentName = 'CodexBootstrapRecoveryE2E';
     const { page, agentId } = await createCliAgent(cliOrkas, agentName, 'codex');
     const cid = await sendNewChat(page, `@${agentName} Earlier requirement: use amber-field.`);
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CODEX_DEFAULT_OK',
     })).toHaveCount(1, { timeout: 30_000 });
     await expect.poll(() => {
@@ -765,7 +800,7 @@ test.describe('CLI failed-turn recovery', () => {
     writeFileSync(cliOrkas.cliStatePath, JSON.stringify({ ...cliOrkas.readCliState(), codexResumeHangs: 1 }));
     await cliOrkas.electronApp!.evaluate(() => { process.env.ORKAS_CODEX_BOOTSTRAP_TIMEOUT_MS = '1500'; });
     await sendFollowUp(page, `@${agentName} Continue the earlier requirement.`);
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CODEX_DEFAULT_OK',
     })).toHaveCount(2, { timeout: 30_000 });
     await expect(page.locator('#chat-history .bubble-retry-btn')).toHaveCount(0);
@@ -784,7 +819,7 @@ test.describe('CLI failed-turn recovery', () => {
       .toContain('cli-bootstrap-timeout');
     await page.screenshot({ path: testInfo.outputPath('codex-bootstrap-recovered.png'), fullPage: true });
     await sendFollowUp(page, `@${agentName} Check the saved requirement.`);
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CODEX_DEFAULT_OK',
     })).toHaveCount(3, { timeout: 30_000 });
     expect(cliOrkas.readCliState().invocations[2].resumeSessionId).toBe(runs[1].sessionId);
@@ -813,7 +848,7 @@ test.describe('CLI failed-turn recovery', () => {
     await expect(page.locator('#chat-history .chat-message.user', {
       hasText: 'E2E_CODEX_SEND_NOW_UPDATE',
     })).toBeVisible();
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CODEX_STEER_APPLIED',
     })).toBeVisible({ timeout: 30_000 });
 
@@ -863,7 +898,7 @@ test.describe('CLI failed-turn recovery', () => {
       await expect(question).toBeHidden();
       await expect(stop).not.toHaveClass(/\b(streaming|aborting)\b/);
       await sendFollowUp(page, `@${name} E2E_CODEX_AFTER_STOP`);
-      await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+      await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
         hasText: 'E2E_CODEX_DEFAULT_OK',
       })).toBeVisible({ timeout: 30_000 });
       expect(cliOrkas.readCliState().invocations).toHaveLength(2);
@@ -885,7 +920,7 @@ test.describe('CLI failed-turn recovery', () => {
         const answer = page.locator('#chat-history .chat-message.user', { hasText: 'Which scope?' });
         await expect(answer).toHaveCount(1);
         await expect(answer).toContainText('Current');
-        await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+        await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
           hasText: 'E2E_CLI_QUESTION_CONTINUED',
         })).toBeVisible({ timeout: 30_000 });
         const history = await cliOrkas.invoke<{ history: Array<{ from: string; text: string }> }>('conversations.history', { cid, limit: 20 });
@@ -967,10 +1002,10 @@ test.describe('CLI failed-turn recovery', () => {
     // Same-agent serial: no second CLI child starts while the first runs.
     expect(cliOrkas.readCliState().invocations).toHaveLength(1);
 
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CLI_SEND_NOW_ACTIVE_OK',
     })).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', {
       hasText: 'E2E_CLI_SEND_NOW_FOLLOWUP_OK',
     })).toBeVisible({ timeout: 30_000 });
 
