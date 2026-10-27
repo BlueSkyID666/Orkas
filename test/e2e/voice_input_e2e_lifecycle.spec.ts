@@ -105,7 +105,6 @@ test.describe('API-key voice input', () => {
       const w = window as any; w.composerSetSelection(element, w.composerText(element).length);
     });
     await page.locator('#new-chat-mic-btn').click();
-    await page.locator('.ui-dialog-overlay.open [data-act="ok"]').click();
     const mic = page.locator('#new-chat-mic-btn');
     const expectActiveIcon = async () => {
       await expect(mic).toHaveCSS('color', 'rgb(220, 38, 38)');
@@ -116,6 +115,7 @@ test.describe('API-key voice input', () => {
     await expectActiveIcon();
     await page.screenshot({ path: testInfo.outputPath('voice-connecting-en.png') });
     await expect.poll(() => !!sendReady).toBe(true);
+    await expect(page.locator('.ui-dialog-overlay.open')).toHaveCount(0);
     sendReady!();
     await expect(mic).toHaveAttribute('data-voice-phase', 'recording');
     await expectActiveIcon();

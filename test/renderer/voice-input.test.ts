@@ -72,6 +72,8 @@ describe('voice input user journey', () => {
     };
     expectState('idle', false, false);
     await h.button.dispatch('click'); await flush();
+    expect(h.context.uiConfirm).not.toHaveBeenCalled();
+    expect(h.invoke).toHaveBeenCalledWith('voice.ensureMicrophoneAccess');
     expectState('connecting', true, false);
     expect(h.button.title).toBe('chat.mic_stop_title');
     h.socket().open(); await flush();

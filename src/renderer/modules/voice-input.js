@@ -362,7 +362,6 @@
 
 
   let active = null;
-  let introShown = false;
   const tr = (key) => t('chat.mic_' + key);
   const invoke = (name) => window.orkas.invoke('voice.' + name);
 
@@ -459,12 +458,6 @@
         if (attempt !== current) return;
         if (!status?.ok) { reset(current); await guidance('unavailable'); return; }
         if (!status.configured) { reset(current); await guidance('api_key_required'); return; }
-        if (!introShown) {
-          const agreed = await uiConfirm({ message: tr('intro'), okLabel: tr('start') });
-          if (attempt !== current) return;
-          if (!agreed) { cancel(); return; }
-          introShown = true;
-        }
         const permission = await invoke('ensureMicrophoneAccess');
         if (attempt !== current) return;
         if (!permission?.ok || !permission.granted) {
