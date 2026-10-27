@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   nowIso, genUserId, genId12, safeId,
-  readJson, readJsonSync, writeJson, writeJsonSync,
+  readJson, readJsonSync, writeJson, writeJsonSync, linkWithRetry,
   writeTextAtomicSync, writeTextAtomicGuardedSync, appendJsonl, appendJsonlAtomic,
   invalidateLineCount, readJsonl, readJsonlPage, readJsonlPageWithOffsets,
   readJsonlWindow, readJsonlWindowAtMatch, __storageTestHooks,
@@ -81,12 +81,75 @@ describe('storage › safeId guard', () => {
   });
 });
 
+describe('storage › exclusive file publication', () => {
+  it('retains both byte sequences when a destination already exists', async () => {
+    const source = path.join(tmpDir, 'complete.tmp');
+    const target = path.join(tmpDir, 'winner.txt');
+    fs.writeFileSync(source, 'new complete bytes');
+    fs.writeFileSync(target, 'existing winner');
+    await expect(linkWithRetry(source, target)).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(fs.readFileSync(source, 'utf8')).toBe('new complete bytes');
+    expect(fs.readFileSync(target, 'utf8')).toBe('existing winner');
+  });
+
+  it('recovers from a transient Windows publication lock without blocking the event loop', async () => {
+    const source = path.join(tmpDir, 'complete.tmp');
+    const target = path.join(tmpDir, 'published.txt');
+    fs.writeFileSync(source, 'complete bytes');
+    const originalLink = fs.promises.link;
+    let first = true;
+    let timerRan = false;
+    const timer = setTimeout(() => { timerRan = true; }, 0);
+    vi.spyOn(fs.promises, 'link').mockImplementation(async (from, to) => {
+      if (first) { first = false; throw eperm(); }
+      await originalLink(from, to);
+    });
+    syncBuiltinESMExports();
+    try {
+      await linkWithRetry(source, target);
+      expect(timerRan).toBe(true);
+      expect(fs.readFileSync(target, 'utf8')).toBe('complete bytes');
+      expect(fs.readFileSync(source, 'utf8')).toBe('complete bytes');
+    } finally { clearTimeout(timer); vi.restoreAllMocks(); syncBuiltinESMExports(); }
+  });
+});
+
 describe('storage › JSON IO', () => {
+  it('strict reads preserve read failures and parse failures while tolerant callers retain compatibility', async () => {
+    const missing = path.join(tmpDir, 'missing-strict.json');
+    await expect(readJson(missing, { strict: true })).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readJson(missing)).toEqual({});
+    const file = path.join(tmpDir, 'recoverable.json');
+    fs.writeFileSync(file, '{broken');
+    await expect(readJson(file, { strict: true })).rejects.toBeInstanceOf(SyntaxError);
+    expect(await readJson(file)).toEqual({});
+    fs.writeFileSync(file, JSON.stringify({ agents: ['kept'] }));
+    expect(await readJson(file, { strict: true })).toEqual({ agents: ['kept'] });
+  });
+
   it('writeJson + readJson roundtrip preserves UTF-8 and structure', async () => {
     const p = path.join(tmpDir, 'nested', 'a.json');
     const data = { x: 1, 中: '文', arr: [1, 2, 3], nested: { a: true } };
     await writeJson(p, data);
     expect(await readJson(p)).toEqual(data);
+  });
+
+  it('preserves committed JSON and removes a partial sibling when a synchronous write runs out of space', () => {
+    const target = path.join(tmpDir, 'state.json');
+    fs.writeFileSync(target, JSON.stringify({ retained: true }));
+    const originalWrite = fs.writeFileSync;
+    vi.spyOn(nativeFs, 'writeFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, data: any, ...args: any[]) => {
+      if (typeof file === 'string' && file.startsWith(target + '.') && file.endsWith('.tmp')) {
+        originalWrite(file, '{'); throw Object.assign(new Error('Controlled partial JSON write'), { code: 'ENOSPC' });
+      }
+      return (originalWrite as any)(file, data, ...args);
+    }) as any);
+    syncBuiltinESMExports();
+    try {
+      expect(() => writeJsonSync(target, { next: true })).toThrow('Controlled partial JSON write');
+      expect(readJsonSync(target)).toEqual({ retained: true });
+      expect(fs.readdirSync(tmpDir)).toEqual(['state.json']);
+    } finally { vi.restoreAllMocks(); syncBuiltinESMExports(); }
   });
 
   it('writeJson is atomic — no .tmp file left behind', async () => {
