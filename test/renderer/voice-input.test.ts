@@ -136,9 +136,11 @@ function loadCompressedCapture(sourcePath: string, failCompression = false) {
     readyState = Socket.CONNECTING;
     frames: (Buffer | string)[] = [];
     onopen?: () => void;
+    onmessage?: (event: any) => void;
     onclose?: () => void;
     constructor(readonly url: string) { sockets.push(this); }
-    open() { this.readyState = Socket.OPEN; this.onopen?.(); }
+    open(ready = true) { this.readyState = Socket.OPEN; this.onopen?.(); if (ready) this.ready(); }
+    ready() { this.onmessage?.({ data: '{"event":"ready"}' }); }
     send(value: Uint8Array | string) {
       if (this.readyState !== Socket.OPEN) throw new Error('socket is closed');
       this.frames.push(typeof value === 'string' ? value : Buffer.from(value));
@@ -168,6 +170,7 @@ function loadWorkletCapture(sourcePath: string, options: {
   delayedModule?: boolean;
   delayedPermission?: boolean;
   dropFlush?: boolean;
+  resumeFails?: boolean;
 } = {}) {
   const modules = new Map<string, string>();
   let releaseModule: () => void = () => {};
@@ -213,7 +216,8 @@ function loadWorkletCapture(sourcePath: string, options: {
     disconnect() {}
   }
   class CaptureContext {
-    state = 'running';
+    state = options.resumeFails ? 'suspended' : 'running';
+    resume() { return Promise.reject(new Error('audio_resume_failed')); }
     sampleRate = 16_000;
     destination = {};
     audioWorklet = {
@@ -249,9 +253,11 @@ function loadWorkletCapture(sourcePath: string, options: {
     readyState = Socket.CONNECTING;
     frames: (Buffer | string)[] = [];
     onopen?: () => void;
+    onmessage?: (event: any) => void;
     onclose?: () => void;
     constructor(_url: string) { sockets.push(this); }
-    open() { this.readyState = Socket.OPEN; this.onopen?.(); }
+    open(ready = true) { this.readyState = Socket.OPEN; this.onopen?.(); if (ready) this.ready(); }
+    ready() { this.onmessage?.({ data: '{"event":"ready"}' }); }
     send(value: Uint8Array | string) {
       this.frames.push(typeof value === 'string' ? value : Buffer.from(value));
     }
@@ -271,7 +277,9 @@ function loadWorkletCapture(sourcePath: string, options: {
   };
   context.clearTimeout = (id: number) => timers.delete(id);
   const errors: Error[] = [];
+  const opened: boolean[] = [];
   const client = context.window.VoiceInput.createClient('wss://example.test/asr', {
+    onOpen: () => opened.push(true),
     onError: (error: Error) => errors.push(error),
   });
   const processSamples = (count: number) => {
@@ -283,7 +291,7 @@ function loadWorkletCapture(sourcePath: string, options: {
     }
   };
   return {
-    client, nodes, sockets, errors, timers, processSamples, releaseModule,
+    client, nodes, sockets, errors, opened, timers, processSamples, releaseModule,
     grantPermission: () => grantPermission(stream),
     tracksStopped: () => tracksStopped,
   };
@@ -330,7 +338,8 @@ function loadDelayedTranscript(sourcePath: string) {
     onmessage?: (event: any) => void;
     onclose?: (event: any) => void;
     constructor(_url: string) { sockets.push(this); }
-    open() { this.readyState = Socket.OPEN; this.onopen?.(); }
+    open(ready = true) { this.readyState = Socket.OPEN; this.onopen?.(); if (ready) this.ready(); }
+    ready() { this.onmessage?.({ data: '{"event":"ready"}' }); }
     receive(text: string, terminal = false) {
       const payload = gzipSync(Buffer.from(JSON.stringify({ result: { text } })));
       const frame = Buffer.alloc(12 + payload.length);
@@ -451,6 +460,30 @@ describe.each([
     expect(pcm.length).toBe(7680);
     expect(pcm).toEqual(expected);
     expect(fixture.errors).toEqual([]);
+    fixture.client.close();
+  });
+
+  it('never announces recording if the audio device cannot resume', async () => {
+    const fixture = loadWorkletCapture(sourcePath, { resumeFails: true });
+    await fixture.client.start(); fixture.sockets[0].open();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(fixture.opened).toEqual([]);
+    expect(fixture.nodes).toEqual([]);
+    expect(fixture.errors.map(error => error.message)).toEqual(['audio_resume_failed']);
+    fixture.client.close();
+    expect(fixture.tracksStopped()).toBe(1);
+  });
+
+  it('announces recording only after the capture graph is ready', async () => {
+    const fixture = loadWorkletCapture(sourcePath, { delayedModule: true });
+    await fixture.client.start(); fixture.sockets[0].open();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(fixture.opened).toEqual([]);
+    expect(fixture.nodes).toEqual([]);
+    fixture.releaseModule();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(fixture.opened).toEqual([true]);
+    expect(fixture.nodes).toHaveLength(1);
     fixture.client.close();
   });
 
@@ -709,7 +742,8 @@ function controllerHarness(voiceOverrides: Record<string, unknown> = {}, globals
     send = vi.fn();
     close = vi.fn(() => { this.readyState = Socket.CLOSED; this.onclose?.({code:1000}); });
     constructor(readonly url: string) { sockets.push(this); }
-    open() { this.readyState = Socket.OPEN; this.onopen?.(); }
+    open(ready = true) { this.readyState = Socket.OPEN; this.onopen?.(); if (ready) this.ready(); }
+    ready() { this.onmessage?.({ data: '{"event":"ready"}' }); }
     result(text: string, last = false) { this.onmessage?.({data:JSON.stringify({result:{text,last}})}); }
     error(reason: string) { this.onmessage?.({data:JSON.stringify({event:'error',reason})}); }
   }
@@ -905,6 +939,65 @@ describe('voice input controller ticket and composer ownership', () => {
 // Remote UI/permission guidance uses the existing controller, preserving all
 // wire-order and composer-owner regression cases above.
 describe('public voice recording controls', () => {
+  it('records one bounded timing summary without retaining the key, audio or recognized text', async () => {
+    let now = 0;
+    const records: any[] = [];
+    const h = controllerHarness({}, { performance: { now: () => now },
+      createLogger: () => ({ info: (...args: any[]) => records.push(args), warn() {}, error() {} }) });
+    await h.start(); now = 300; h.sockets[0].open(false);
+    now = 900; h.sockets[0].ready(); await h.settle();
+    now = 1400; h.sockets[0].result('private spoken text');
+    now = 2000; h.button.click();
+    now = 2400; h.sockets[0].result('private spoken text', true); await h.settle();
+    const summaries = records.filter(record => record[0] === 'voice timing');
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0][1]).toMatchObject({ socket_open_ms: 300, service_ready_ms: 900,
+      capture_ready_ms: 900, first_text_ms: 1400, stop_ms: 2000, final_text_ms: 2400,
+      final_wait_ms: 400, total_ms: 2400 });
+    expect(JSON.stringify(records)).not.toMatch(/private spoken text|one-use|example.test/);
+  });
+
+  it('waits for service readiness before recording, and a duplicate ready cannot recreate capture', async () => {
+    const h = controllerHarness();
+    await h.start();
+    const socket = h.sockets[0]; socket.open(false);
+    expect(h.button.classList.contains('is-recording')).toBe(false);
+    expect(h.button.dataset.voicePhase).toBe('connecting');
+    expect(h.captureNodes).toHaveLength(0);
+    expect(socket.send).not.toHaveBeenCalled();
+    socket.ready(); await h.settle();
+    expect(h.button.dataset.voicePhase).toBe('recording');
+    expect(h.captureNodes).toHaveLength(1);
+    socket.ready(); await h.settle();
+    expect(h.captureNodes).toHaveLength(1);
+    h.ownerChange();
+  });
+  it('cancels while waiting for ready without capturing late audio or altering the draft', async () => {
+    const h = controllerHarness(); await h.start();
+    const socket = h.sockets[0]; socket.open(false);
+    h.button.click(); socket.ready(); await h.settle();
+    expect(h.captureNodes).toHaveLength(0);
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(socket.close).toHaveBeenCalledTimes(1);
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+    expect(h.button.dataset.voicePhase).toBe('idle');
+    expect(h.textarea.value).toBe('Keep this draft');
+    expect(h.alerts).toEqual([]);
+    expect(h.timers.size).toBe(0);
+  });
+  it('bounds a missing ready event and lets the user retry with the draft intact', async () => {
+    const h = controllerHarness(); await h.start();
+    const socket = h.sockets[0]; socket.open(false);
+    expect(h.timers.size).toBe(1);
+    [...h.timers.values()][0](); await h.settle();
+    expect(h.captureNodes).toHaveLength(0);
+    expect(h.button.dataset.voicePhase).toBe('idle');
+    expect(h.textarea.value).toBe('Keep this draft');
+    expect(h.alerts).toEqual([h.context.t('chat.mic_error_unavailable')]);
+    await h.start(); h.sockets[1].open();
+    expect(h.button.dataset.voicePhase).toBe('recording');
+    h.ownerChange();
+  });
   it('starts without an introduction and keeps icon-only state across repeat attempts', async () => {
     const h = controllerHarness();
     const state = (phase: string, recording: boolean, busy: boolean) => {
@@ -915,7 +1008,7 @@ describe('public voice recording controls', () => {
     };
     state('idle', false, false);
     for (let n = 0; n < 2; n++) {
-      await h.start(); state('connecting', true, false);
+      await h.start(); state('connecting', false, true);
       const socket = h.sockets[n]; socket.open(); state('recording', true, false);
       h.button.click(); state('finalizing', false, true);
       expect(h.button.title).toBe(h.context.t('chat.mic_finalizing'));

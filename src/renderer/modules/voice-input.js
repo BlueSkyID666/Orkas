@@ -32,6 +32,28 @@
     return { code: publicCode || _voiceErrorCode(e && (e.name || e.message)) };
   }
 
+  function voiceNow() {
+    return typeof performance !== 'undefined' ? performance.now() : Date.now();
+  }
+
+  function markVoiceTiming(attempt, stage) {
+    if (!attempt || attempt.timingReported || attempt.timings[stage] !== undefined) return;
+    attempt.timings[stage] = Math.max(0, Math.round(voiceNow() - attempt.timingStart));
+  }
+
+  function reportVoiceTiming(attempt) {
+    if (!attempt || attempt.timingReported) return;
+    markVoiceTiming(attempt, 'total_ms');
+    attempt.timingReported = true;
+    const timings = attempt.timings;
+    const finalWait = timings.stop_ms !== undefined && timings.final_text_ms !== undefined
+      ? Math.max(0, timings.final_text_ms - timings.stop_ms) : undefined;
+    // One local summary per attempt, numeric milestones only. Never retain audio,
+    // transcript text, credentials, or the session-bearing WebSocket URL.
+    try { voiceLog?.info('voice timing', { ...timings, final_wait_ms: finalWait,
+      phase: attempt.phase, terminal: timings.final_text_ms !== undefined }); } catch {}
+  }
+
   async function gzipBytes(u8) {
     const stream = new Blob([u8]).stream().pipeThrough(new CompressionStream('gzip'));
     return new Uint8Array(await new Response(stream).arrayBuffer());
@@ -114,6 +136,7 @@
         return;
       }
       this._mediaStream = mediaStream;
+      this._emit('onStage', 'microphone_ms');
       let ws;
       try {
         ws = new WebSocket(this._connectUrl());
@@ -149,10 +172,9 @@
           return;
         }
         try { if (voiceLog) voiceLog.info('ASR websocket open'); } catch {}
-        clearTimeout(this._connectTimer);
-        this._running = true;
-        this._emit('onOpen');
-        this._startCapture();
+        this._emit('onStage', 'socket_open_ms');
+        // The ticket protocol sends ready only after auth, quota and provider setup.
+        // Keep the setup deadline active until capture is actually ready.
       };
       ws.onmessage = (ev) => {
         if (this._ws !== ws) return;
@@ -203,8 +225,14 @@
     _handleJSON(s) {
       let obj;
       try { obj = JSON.parse(String(s || '{}')); } catch { return; }
-      // Some public peers send a ready control message; it is not a transcript.
-      if (obj && obj.event === 'ready') return;
+      if (obj && obj.event === 'ready') {
+        if (!this._running && !this._pendingClose && this._ws?.readyState === WebSocket.OPEN) {
+          this._emit('onStage', 'service_ready_ms');
+          this._running = true;
+          this._startCapture();
+        }
+        return;
+      }
       if (obj && obj.event === 'timeout') {
         const err = Object.assign(new Error('asr_timeout'), { code: 'timeout' });
         err.maxSeconds = Number(obj.max_seconds || obj.maxSeconds || 0) || undefined;
@@ -310,7 +338,8 @@
         if (!ms) throw new Error('no_media_stream');
         const Ctx = window.AudioContext || window.webkitAudioContext;
         this._audioCtx = new Ctx();
-        try { if (this._audioCtx.state === 'suspended') await this._audioCtx.resume(); } catch {}
+        if (this._audioCtx.state === 'suspended') await this._audioCtx.resume();
+        if (active() && this._audioCtx.state !== 'running') throw new Error('audio_context_unavailable');
         if (!active()) return;
         this._source = this._audioCtx.createMediaStreamSource(ms);
         this._inRate = this._audioCtx.sampleRate || 48000;
@@ -418,6 +447,8 @@ registerProcessor('orkas-asr-capture', C);`;
         try { this._silentGain.gain.value = 0; } catch {}
         this._captureNode.connect(this._silentGain);
         this._silentGain.connect(this._audioCtx.destination);
+        clearTimeout(this._connectTimer);
+        this._emit('onOpen');
       } catch (e) {
         if (!active()) return;
         try { if (voiceLog) voiceLog.error('audio capture start failed', _errorInfo(e)); } catch {}
@@ -673,11 +704,11 @@ registerProcessor('orkas-asr-capture', C);`;
     function setPhase(p) {
       phase = p;
       buttonEl.dataset.voicePhase = p;
-      buttonEl.classList.toggle('is-recording', p === 'recording' || p === 'connecting');
-      buttonEl.classList.toggle('is-busy', p === 'finalizing');
-      const titleKey = p === 'finalizing' ? 'chat.mic_finalizing' : (p === 'recording' || p === 'connecting')
+      buttonEl.classList.toggle('is-recording', p === 'recording');
+      buttonEl.classList.toggle('is-busy', p === 'connecting' || p === 'finalizing');
+      const titleKey = p === 'connecting' ? 'chat.mic_connecting' : p === 'finalizing' ? 'chat.mic_finalizing' : (p === 'recording' || p === 'connecting')
         ? 'chat.mic_stop_title' : 'chat.mic_title';
-      const titleFallback = p === 'finalizing' ? 'Finishing recognition…' : (p === 'recording' || p === 'connecting')
+      const titleFallback = p === 'connecting' ? 'Connecting…' : p === 'finalizing' ? 'Finishing recognition…' : (p === 'recording' || p === 'connecting')
         ? 'Stop recording' : 'Voice input';
       buttonEl.title = _t(titleKey, titleFallback);
       buttonEl.setAttribute('aria-label', buttonEl.title);
@@ -702,6 +733,7 @@ registerProcessor('orkas-asr-capture', C);`;
     }
 
     function reset(attempt) {
+      reportVoiceTiming(attempt);
       clearLimitTimer(attempt);
       attempt.insertion?.dispose();
       if (activeAttempt !== attempt) return;
@@ -739,6 +771,7 @@ registerProcessor('orkas-asr-capture', C);`;
       if (activeAttempt) return;
       if (cancelActive) cancelActive();
       const attempt = {
+        timingStart: voiceNow(), timings: {}, timingReported: false,
         recordingStarted: false,
         finished: false,
         cancelled: false,
@@ -789,6 +822,7 @@ registerProcessor('orkas-asr-capture', C);`;
         }
         if (!r || r.ok === false || !r.url) throw new Error((r && r.error) || 'no_url');
         url = r.url;
+        markVoiceTiming(attempt, 'session_ms');
       } catch (e) {
         if (activeAttempt !== attempt || attempt.cancelled) return;
         try { if (voiceLog) voiceLog.error('failed to resolve ASR websocket URL', _errorInfo(e)); } catch {}
@@ -800,14 +834,18 @@ registerProcessor('orkas-asr-capture', C);`;
       if (activeAttempt !== attempt || attempt.cancelled) return;
       if (!attempt.insertion?.valid()) { reset(attempt); return; }
       const attemptClient = new AsrClient(url, {
+        onStage: (stage) => { if (activeAttempt === attempt) markVoiceTiming(attempt, stage); },
         onOpen: () => {
           if (activeAttempt !== attempt) return;
+          markVoiceTiming(attempt, 'capture_ready_ms');
           attempt.recordingStarted = true;
           setAttemptPhase(attempt, 'recording');
           startLimitTimer(attempt);
         },
         onResult: ({ text, last }) => {
           if (activeAttempt !== attempt) return;
+          if (text) markVoiceTiming(attempt, 'first_text_ms');
+          if (last) markVoiceTiming(attempt, 'final_text_ms');
           if (text) applyTranscript(attempt, text);
           if (last && activeAttempt === attempt) {
             attempt.finished = true; reset(attempt); attemptClient.close();
@@ -881,9 +919,10 @@ registerProcessor('orkas-asr-capture', C);`;
         const attemptClient = attempt.client;
         attempt.finished = true;
         reset(attempt);
-        try { if (attemptClient) attemptClient.stop(); } catch {}
+        try { if (attemptClient) attemptClient.close(); } catch {}
         return;
       }
+      markVoiceTiming(attempt, 'stop_ms');
       setAttemptPhase(attempt, 'finalizing');
       try {
         if (!attempt.client) throw new Error('voice_client_unavailable');

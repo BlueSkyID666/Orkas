@@ -3632,6 +3632,8 @@ export class OrkasTestApp {
             '',
             '',
           ].join('\r\n'));
+          const ready = Buffer.from('{"event":"ready"}');
+          socket.write(Buffer.concat([Buffer.from([0x81, ready.length]), ready]));
         };
         // Keep the HTTP upgrade pending until the client cancels. This makes
         // the negotiation-cancellation contract deterministic under load;

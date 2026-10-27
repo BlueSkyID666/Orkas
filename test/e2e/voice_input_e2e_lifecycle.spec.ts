@@ -88,7 +88,8 @@ test.describe('voice input', () => {
     const mic = page.locator('#new-chat-mic-btn');
     await input.fill('Keep this draft');
     await mic.click();
-    await expect(mic).toHaveClass(/\bis-recording\b/);
+    await expect(mic).toHaveClass(/\bis-busy\b/);
+    await expect(mic).not.toHaveClass(/\bis-recording\b/);
     await expect.poll(() => page.evaluate(() => (window as any).__e2eVoiceSocketUrls.length)).toBe(1);
     await mic.click();
 
@@ -152,9 +153,11 @@ test.describe('API-key voice input', () => {
       await (window as any).orkas.invoke('orkasApi.save', { apiKey: 'synthetic-voice-e2e-key' });
       const w = window as any;
       w.__voiceStops = 0;
+      w.__voiceCaptures = 0;
       Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { configurable: true, value: async () => ({ getTracks: () => [{ stop() { w.__voiceStops++; } }] }) });
       const node = () => ({ connect() {}, disconnect() {} });
       w.AudioContext = class {
+        constructor() { w.__voiceCaptures++; }
         state = 'running'; sampleRate = 48000; destination = {};
         audioWorklet = { addModule: async () => {} };
         createMediaStreamSource = node;
@@ -180,7 +183,8 @@ test.describe('API-key voice input', () => {
       const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
       const upgrade = () => socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
       const ready = Buffer.from('{"event":"ready"}');
-      sendReady = () => { upgrade(); socket.write(Buffer.concat([Buffer.from([0x81, ready.length]), ready])); };
+      upgrade();
+      sendReady = () => { socket.write(Buffer.concat([Buffer.from([0x81, ready.length]), ready])); };
       let buffer = Buffer.alloc(0);
       socket.on('data', chunk => {
         buffer = Buffer.concat([buffer, chunk]);
@@ -206,6 +210,7 @@ test.describe('API-key voice input', () => {
         constructor(url: string, protocols?: string | string[]) {
           if (!url.startsWith('wss://orkas.ai/api/voice/asr_ws?ticket=')) throw new Error('Unexpected voice destination');
           super('ws://127.0.0.1:' + port + '/api/voice/asr_ws', protocols);
+          this.addEventListener('open', () => { (window as any).__voiceTransportOpen = true; });
         }
       };
     }, (server.address() as AddressInfo).port);
@@ -221,13 +226,19 @@ test.describe('API-key voice input', () => {
       await expect(page.locator('.chat-mic-status:visible')).toHaveCount(0);
     };
     await expect(mic).toHaveAttribute('data-voice-phase', 'connecting');
-    await expectActiveIcon();
+    await expect.poll(() => page.evaluate(() => !!(window as any).__voiceTransportOpen)).toBe(true);
+    await expect(mic).toHaveClass(/is-busy/);
+    await expect(mic).not.toHaveClass(/is-recording/);
+    await expect(mic).toHaveCSS('animation-name', 'none');
+    await expect(mic).toHaveAttribute('aria-label', 'Connecting…');
+    expect(await page.evaluate(() => (window as any).__voiceCaptures)).toBe(0);
     await page.screenshot({ path: testInfo.outputPath('voice-connecting-en.png') });
     await expect.poll(() => !!sendReady).toBe(true);
     await expect(page.locator('.ui-dialog-overlay.open')).toHaveCount(0);
     sendReady!();
     await expect(mic).toHaveAttribute('data-voice-phase', 'recording');
     await expectActiveIcon();
+    expect(await page.evaluate(() => (window as any).__voiceCaptures)).toBe(1);
     await page.screenshot({ path: testInfo.outputPath('voice-recording-en.png') });
     await page.setViewportSize({ width: 760, height: 600 });
     await page.evaluate(async () => { await (window as any).setLang('zh'); });
