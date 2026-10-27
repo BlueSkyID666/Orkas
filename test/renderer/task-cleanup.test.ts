@@ -44,6 +44,21 @@ function harness() {
     show: () => scope.window.initTaskCleanup() };
 }
 describe('inline history cleanup', () => {
+  it('reports a fresh remaining count without extending the confirmed selection to later arrivals', async () => {
+    const h = harness(); const original = h.invoke.getMockImplementation()!;
+    let previews = 0;
+    h.invoke.mockImplementation(async (channel, payload) => {
+      const response = await original(channel, payload);
+      if (channel.endsWith('preview') && ++previews > 1) return { ...response, total: 1, selectableTotal: 1,
+        entries: [{ cid: 'later-arrival', title: 'Later arrival', selectable: true }], treeTotal: 1 };
+      return response;
+    });
+    await h.show(); await h.check(null, true); await h.click('prepare'); await h.click('confirm');
+    expect(h.invoke.mock.calls.filter(([c]) => c.endsWith('remove')).map(([, p]: any) => p.cid)).toEqual(['one', 'two']);
+    expect(h.body.innerHTML).toContain('Recycled 2 · Skipped 0 · Failed 0');
+    expect(h.body.innerHTML).toContain('Still matching: 1. Review and select again to continue.');
+    expect(h.body.innerHTML).toContain('Clean up (0)');
+  });
   it.each([undefined, 'busy', 'unknown'])('opens a task with blocking state %s without selecting or deleting it', async blocked => {
     const h = harness();
     const original = h.invoke.getMockImplementation()!;

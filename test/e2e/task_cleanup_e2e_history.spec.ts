@@ -3,6 +3,39 @@ import path from 'node:path';
 import { test, expect } from './fixtures/orkas';
 
 test.describe('inline historical task cleanup', () => {
+  test('shows remaining history after cleanup and requires a new selection', async ({ orkas }, testInfo) => {
+    const cids: string[] = [];
+    for (const title of ['Selected history', 'History left for review']) {
+      cids.push((await orkas.invoke<any>('conversations.create', { title })).conversation.conversation_id);
+    }
+    const root = path.join(orkas.workspaceRoot, 'account-e2e', 'cloud', 'chats');
+    const rows = JSON.parse(readFileSync(path.join(root, '_index.json'), 'utf8'));
+    const old = '2020-01-01T00:00:00Z';
+    for (const row of rows) {
+      row.created_at = row.updated_at = old;
+      writeFileSync(path.join(root, row.conversation_id, 'meta.json'), JSON.stringify(row));
+      writeFileSync(path.join(root, `${row.conversation_id}.jsonl`), JSON.stringify({ id: 'request', from: 'user', content: row.title, ts: old }) + '\n');
+    }
+    writeFileSync(path.join(root, '_index.json'), JSON.stringify(rows));
+    const page = await orkas.relaunch();
+    await page.locator('#settings-btn').click();
+    await page.locator('[data-settings-tab="data"]').click();
+    const section = page.locator('#settings-task-cleanup');
+    await section.locator('[data-cleanup-action="view"]').click();
+    await section.locator(`[data-cleanup-cid="${cids[0]}"]`).check();
+    await section.locator('[data-cleanup-action="prepare"]').click();
+    await section.locator('[data-cleanup-action="confirm"]').click();
+    await expect(section).toContainText('Still matching: 1. Review and select again to continue.');
+    await expect(section.locator('[data-cleanup-action="prepare"]')).toBeDisabled();
+    expect(existsSync(path.join(root, `${cids[0]}.jsonl`))).toBe(false);
+    expect(existsSync(path.join(root, `${cids[1]}.jsonl`))).toBe(true);
+    for (const [lang, width, height] of [['en', 1280, 900], ['zh', 1000, 720], ['en', 620, 780]] as const) {
+      await page.setViewportSize({ width, height });
+      await page.evaluate(async lang => { await (window as any).setLang(lang); }, lang);
+      await section.screenshot({ path: testInfo.outputPath(`cleanup-remaining-${lang}-${width}.png`) });
+      expect(await section.locator('[role="status"]').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    }
+  });
   test('uses sidebar timestamps and retains tasks renamed before preview or confirmation', async ({ orkas }, testInfo) => {
     const cids: string[] = [];
     for (const title of ['Old task metadata', 'Rename before preview', 'Rename before confirmation']) {
