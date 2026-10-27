@@ -178,7 +178,7 @@ describe('fetch-win-vc-runtime', () => {
     // The shared installer cleanup hook is independent of app-local VC deployment.
     expect(pkg.build.nsis?.include).toBe('scripts/windows-installer.nsh');
     const include = fs.readFileSync(path.join(process.cwd(), pkg.build.nsis.include), 'utf8');
-    expect(include).not.toMatch(/vc_redist|whisper-runtime|msiexec/i);
+    expect(include).not.toMatch(/vc_?redist|whisper-runtime|msiexec/i);
     expect(fs.existsSync(path.join(process.cwd(), 'product', 'whisper-runtime.nsh'))).toBe(false);
   });
 
