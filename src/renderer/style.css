@@ -13256,6 +13256,7 @@ body.is-task-side-panel-resizing * { cursor: col-resize !important; }
   flex-direction: column;
   gap: 6px;
 }
+.agents-detail-section[hidden] { display: none; }
 .agents-detail-section-workflow {
   flex: 1;
   min-height: 200px;
