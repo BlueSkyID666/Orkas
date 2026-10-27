@@ -1552,6 +1552,7 @@ function _settingsShowApiKeyForm(provider, modelId) {
   saveBtn.className = 'btn btn-primary';
   saveBtn.textContent = t('settings.save');
   const save = async () => {
+    if (saveBtn.disabled || overlay._onKey !== formOwner) return;
     const startedAt = Date.now();
     const resolvedModelId = _settingsResolveApiKeyModelId(provider.id, modelId, modelInput?.value);
     const label  = (labelInput.value || '').trim();
@@ -1580,6 +1581,10 @@ function _settingsShowApiKeyForm(provider, modelId) {
       });
     } catch (_) {
       addRes = { ok: false, code: 'invoke_failed' };
+    }
+    if (overlay._onKey !== formOwner) {
+      if (addRes && addRes.ok) await _settingsReload();
+      return;
     }
     if (!addRes || !addRes.ok) {
       saveBtn.disabled = false;
@@ -1611,6 +1616,7 @@ function _settingsShowApiKeyForm(provider, modelId) {
   actions.appendChild(cancelBtn);
   actions.appendChild(saveBtn);
   _settingsOpenModal(overlay);
+  const formOwner = overlay._onKey;
   setTimeout(() => (modelInput || labelInput).focus(), 0);
 }
 
@@ -1752,6 +1758,7 @@ function _settingsShowCustomModelForm(provider) {
   saveBtn.className = 'btn btn-primary';
   saveBtn.textContent = t('settings.save');
   const save = async () => {
+    if (saveBtn.disabled || overlay._onKey !== formOwner) return;
     const startedAt = Date.now();
     const payload = _settingsBuildCustomModelPayload({
       label: labelInput.value,
@@ -1780,6 +1787,10 @@ function _settingsShowCustomModelForm(provider) {
       addRes = await window.orkas.invoke('auth.addCustomModelEntry', payload);
     } catch (_) {
       addRes = { ok: false, code: 'invoke_failed' };
+    }
+    if (overlay._onKey !== formOwner) {
+      if (addRes && addRes.ok) await _settingsReload();
+      return;
     }
     if (!addRes || !addRes.ok) {
       saveBtn.disabled = false;
@@ -1816,6 +1827,7 @@ function _settingsShowCustomModelForm(provider) {
   actions.appendChild(cancelBtn);
   actions.appendChild(saveBtn);
   _settingsOpenModal(overlay);
+  const formOwner = overlay._onKey;
   setTimeout(() => labelInput.focus(), 0);
 }
 
@@ -1845,7 +1857,8 @@ function _settingsCloseModal(overlay) {
 
 let _oauthFlowPollTimer = null;
 let _oauthFlowId        = null;
-let _oauthFlowTarget    = null;
+let _oauthFlowTarget = null;
+let _oauthFlowOwner = null;
 
 async function _settingsStartOAuthFlow(provider, modelId) {
   const overlay   = document.getElementById('oauth-flow-modal');
@@ -1860,6 +1873,8 @@ async function _settingsStartOAuthFlow(provider, modelId) {
   const aliased = oauthProviderId !== provider.id;
 
   _settingsCloseAddModal();
+  if (_oauthFlowOwner) _oauthFlowOwner.closeFlow();
+  const owner = { closeFlow: null, settling: false };
   _oauthFlowTarget = { provider, modelId, oauthProviderId };
   title.textContent = t('settings.oauth.title_prefix', { provider: provider.label || provider.id });
   const aliasTip = aliased
@@ -1869,23 +1884,36 @@ async function _settingsStartOAuthFlow(provider, modelId) {
   overlay.classList.add('open');
 
   const closeFlow = () => {
+    if (_oauthFlowOwner !== owner) return;
     if (_oauthFlowPollTimer) { clearInterval(_oauthFlowPollTimer); _oauthFlowPollTimer = null; }
     if (_oauthFlowId) {
       window.orkas.invoke('auth.cancelOAuthFlow', { flowId: _oauthFlowId }).catch(() => {});
     }
     _oauthFlowId = null;
     _oauthFlowTarget = null;
+    _oauthFlowOwner = null;
     overlay.classList.remove('open');
     document.removeEventListener('keydown', onKey, true);
   };
   const onKey = (e) => { if (e.key === 'Escape') closeFlow(); };
+  owner.closeFlow = closeFlow;
+  _oauthFlowOwner = owner;
   closeBtn.onclick = closeFlow;
   document.addEventListener('keydown', onKey, true);
 
   _settingsLog.info('oauth start', { provider: oauthProviderId });
-  let startRes;
-  try { startRes = await window.orkas.invoke('auth.startOAuth', { provider: oauthProviderId }); }
-  catch (_) { startRes = { ok: false, code: 'invoke_failed' }; }
+  let startRes = null;
+  try {
+    startRes = await window.orkas.invoke('auth.startOAuth', { provider: oauthProviderId });
+  } catch (_) {
+    startRes = { ok: false, code: 'invoke_failed' };
+  }
+  if (_oauthFlowOwner !== owner) {
+    if (startRes && startRes.ok && startRes.flowId) {
+      window.orkas.invoke('auth.cancelOAuthFlow', { flowId: startRes.flowId }).catch(() => {});
+    }
+    return;
+  }
   if (!startRes || !startRes.ok) {
     body.innerHTML = `<div class="oauth-flow-stage error">${escapeHtml((startRes && startRes.error) || t('settings.oauth.start_failed'))}</div>`;
     _settingsLog.warn('oauth start failed', { provider: oauthProviderId, error: startRes && startRes.error });
@@ -1895,8 +1923,9 @@ async function _settingsStartOAuthFlow(provider, modelId) {
 
   let lastKind = '';
   _oauthFlowPollTimer = setInterval(async () => {
-    if (!_oauthFlowId) return;
+    if (_oauthFlowOwner !== owner || !_oauthFlowId) return;
     const res = await window.orkas.invoke('auth.pollOAuthFlow', { flowId: _oauthFlowId });
+    if (_oauthFlowOwner !== owner) return;
     if (!res || !res.ok) return;
     const status = res.status || {};
     if (status.kind === lastKind && status.kind !== 'done' && status.kind !== 'error') return;
@@ -1908,6 +1937,9 @@ async function _settingsStartOAuthFlow(provider, modelId) {
 function _oauthFlowRender(provider, status, closeFlow) {
   const body = document.getElementById('oauth-flow-body');
   if (!body) return;
+  const owner = _oauthFlowOwner;
+  if (!owner || owner.closeFlow !== closeFlow || owner.settling) return;
+  const isCurrent = () => _oauthFlowOwner === owner;
 
   if (status.kind === 'starting' || status.kind === 'progress') {
     body.innerHTML = `<div class="oauth-flow-stage">${escapeHtml(status.message || t('settings.oauth.processing'))}</div>`;
@@ -1994,6 +2026,9 @@ function _oauthFlowRender(provider, status, closeFlow) {
   }
 
   if (status.kind === 'done') {
+    // Finish an admitted write and its failure cleanup with captured inputs;
+    // only its view updates belong to this dialog.
+    owner.settling = true;
     const target = _oauthFlowTarget;
     const profileId = status.profileId || '';
     body.innerHTML = `<div class="oauth-flow-stage ok">${escapeHtml(t('settings.oauth.success_writing'))}</div>`;
@@ -2005,7 +2040,9 @@ function _oauthFlowRender(provider, status, closeFlow) {
       };
       const failEntrySave = async (errorCode, message, logContext = {}) => {
         await removeNewCredential();
-        body.innerHTML = `<div class="oauth-flow-stage error">${escapeHtml(message || t('settings.add_entry_failed'))}</div>`;
+        if (isCurrent()) {
+          body.innerHTML = `<div class="oauth-flow-stage error">${escapeHtml(message || t('settings.add_entry_failed'))}</div>`;
+        }
         _settingsLog.warn('oauth entry save failed', {
           error_code: errorCode,
           ...logContext,
@@ -2056,13 +2093,14 @@ function _oauthFlowRender(provider, status, closeFlow) {
         });
         return;
       }
-      closeFlow();
+      if (isCurrent()) closeFlow();
       await _settingsReload();
     })();
     return;
   }
 
   if (status.kind === 'error') {
+    owner.settling = true;
     body.innerHTML = `<div class="oauth-flow-stage error">${escapeHtml(status.error || t('settings.oauth.auth_failed'))}</div>`;
     if (_oauthFlowPollTimer) { clearInterval(_oauthFlowPollTimer); _oauthFlowPollTimer = null; }
     return;
@@ -2495,6 +2533,7 @@ function _settingsOrkasServiceLabel(service) {
 const _SEARCH_PROVIDER_OPTIONS = [
   { id: 'orkas-api',          label: _settingsOrkasServiceLabel('Search'), docs: _ORKAS_API_KEYS_URL },
   { id: 'tavily',            label: 'Tavily', docs: 'https://tavily.com/' },
+  { id: 'deepseek',          label: 'DeepSeek', docs: 'https://api-docs.deepseek.com/guides/search/' },
   { id: 'serper',            label: 'Serper', docs: 'https://serper.dev/' },
   { id: 'brave-search',      label: 'Brave', docs: 'https://brave.com/search/api/' },
   { id: 'baidu-ai-search',   label: 'Baidu', docs: 'https://cloud.baidu.com/doc/qianfan-api/s/em82g4tlk' },
@@ -2633,7 +2672,7 @@ function _settingsRenderSearchEntries() {
 // ── Image generation API key section ────────────────────────────────────
 //
 // Multi-model providers are flattened into individual choices. The picker
-// shows DouBao · Seedream 5.0 Lite / Pro directly, while the main process
+// shows DouBao · Seedream 5.0 Flash / Pro directly, while the main process
 // still persists provider=doubao plus the selected model id.
 
 const _IMAGE_PROVIDER_OPTIONS = [

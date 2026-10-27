@@ -243,6 +243,29 @@ describe('project to-do controls', () => {
     }
   });
 
+  it('offers only usable Agents for assignment when a bound Agent is unavailable', () => {
+    let menu: any[] = [];
+    const context = vm.createContext({
+      currentUserId: 'me',
+      createLogger: () => ({ warn() {}, info() {}, error() {} }),
+      document: { readyState: 'loading', addEventListener() {} },
+      window: { addEventListener() {}, orkas: { async invoke() { return { ok: true }; } } },
+      showContextMenu(_event: any, items: any[]) { menu = items; },
+      t: (key: string) => key,
+      setTimeout, clearTimeout,
+    });
+    vm.runInContext(composerAccessorSource, context);
+    vm.runInContext(source, context);
+    const task = { id: 't_a', status: 'todo', owner_agent_id: 'deleted01', owner_agent: 'Previous owner' };
+    const scope = { pid: 'p_personal', project: {}, tasks: [task], agents: [
+      { agent_id: 'deleted01', name: '', source: 'custom', enabled: false, unavailable: true },
+      { agent_id: 'a', name: 'Alpha' },
+    ] };
+    context._openTodoAssignMenu({}, 't_a', scope);
+    expect(menu.map((item) => item.label)).toEqual(['chat.recipient_commander', 'Alpha']);
+    expect(menu.some((item) => item.trailingIcon === 'check')).toBe(false);
+  });
+
   it.each(['todo', 'progress', 'review', 'done'])('offers immediate processing only for unfinished %s tasks', async (status) => {
     const calls: any[] = [];
     const navigations: any[] = [];

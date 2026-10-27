@@ -2028,8 +2028,9 @@ function _todoCommanderAgent() {
   return { agent_id: 'commander', name: t('chat.recipient_commander'), enabled: true, ...avatar };
 }
 
+// An unavailable binding cannot run; an existing owner keeps its stored name.
 function _todoAssignableAgents(list = []) {
-  return [_todoCommanderAgent(), ...list.filter((a) => a?.agent_id && a.agent_id !== 'commander')
+  return [_todoCommanderAgent(), ...list.filter((a) => a?.agent_id && a.agent_id !== 'commander' && !a.unavailable)
     .slice().sort((a, b) => String(a.name || a.agent_id).localeCompare(String(b.name || b.agent_id)))];
 }
 
@@ -2490,18 +2491,21 @@ function _renderProjectAgentCards(items) {
   return sorted.map((a) => {
     const id = a.agent_id || a.id || '';
     const enabled = a.enabled !== false;
+    const unavailable = a.unavailable === true;
     const avatarHtml = (typeof renderAvatarHtml === 'function')
       ? renderAvatarHtml(a.icon, a.color, {
         size: 28, seed: id, extraClass: 'project-agent-row-avatar',
       })
       : '';
+    // Missing local definitions keep their binding until explicit removal.
+    const unavailableAttr = unavailable ? ' data-project-agent-unavailable="removable"' : '';
     return `
       <div class="project-agent-row${enabled ? '' : ' is-disabled'}" role="button" tabindex="0"
-           data-project-agent-id="${escapeHtml(id)}" data-project-agent-name="${escapeHtml(a.name || '')}" data-source="${escapeHtml(a.source || '')}">
+           data-project-agent-id="${escapeHtml(id)}" data-project-agent-name="${escapeHtml(a.name || '')}" data-source="${escapeHtml(a.source || '')}"${unavailableAttr}>
         ${avatarHtml}
-        <span class="project-agent-row-name">${escapeHtml(a.name || t('agents.unnamed'))}</span>
+        <span class="project-agent-row-name">${escapeHtml(unavailable ? t('project.bindings.unavailable') : (a.name || t('agents.unnamed')))}</span>
         <div class="project-agent-row-actions">
-          <button type="button" class="project-agent-row-run agent-card-use" data-project-agent-run title="${useTitle}" aria-label="${useTitle}">
+          <button type="button" class="project-agent-row-run agent-card-use" data-project-agent-run title="${useTitle}" aria-label="${useTitle}" ${unavailable ? 'disabled' : ''}>
             ${useLabel}
           </button>
           <button type="button" class="project-agent-row-remove" data-project-agent-remove title="${removeTitle}" aria-label="${removeTitle}">
@@ -2518,15 +2522,16 @@ function _bindProjectAgentCards() {
   if (!root) return;
   root.querySelectorAll('.project-agent-row[data-project-agent-id]').forEach((card) => {
     const id = card.dataset.projectAgentId || '';
+    const unavailable = card.dataset.projectAgentUnavailable || '';
     card.addEventListener('click', async () => {
-      await _openProjectAgentDetail(id);
+      await _openProjectAgentDetail(id, unavailable);
     });
     card.addEventListener('keydown', async (e) => {
       if (e.isComposing || e.keyCode === 229) return;
       if (e.target?.closest?.('button')) return;
       if (e.key !== 'Enter' && e.key !== ' ') return;
       e.preventDefault();
-      await _openProjectAgentDetail(id);
+      await _openProjectAgentDetail(id, unavailable);
     });
     card.querySelector('[data-project-agent-run]')?.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -2539,8 +2544,14 @@ function _bindProjectAgentCards() {
   });
 }
 
-async function _openProjectAgentDetail(agentId) {
+async function _openProjectAgentDetail(agentId, unavailable = '') {
   if (!agentId) return;
+  if (unavailable) {
+    if (typeof uiToast === 'function') {
+      uiToast(t('project.bindings.unavailable_remove_hint'));
+    }
+    return;
+  }
   try {
     if (typeof openAgentDetail === 'function') {
       await openAgentDetail(agentId);

@@ -238,7 +238,7 @@ test.describe('My Apps', () => {
       await expect(page.locator('#chat-header .chat-app-type-tag')).toHaveCount(0);
       await expect(page.locator('#chat-history .chat-message.user')).toHaveCount(1);
       await expect(page.locator('#chat-history .chat-message.user')).toContainText(prompt);
-      await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', { hasText: 'APP_CREATE_ACK' })).toBeVisible({ timeout: 20_000 });
+      await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', { hasText: 'APP_CREATE_ACK' })).toBeVisible({ timeout: 20_000 });
       expect(orkas.modelRequests).toHaveLength(1);
       expectAppCreationContext(orkas.modelRequests[0]);
       await expect(page.locator('#chat-history .chat-message.user')).not.toContainText('## App creation');
@@ -288,7 +288,7 @@ test.describe('My Apps', () => {
     expect(orkas.modelRequests).toHaveLength(0);
     expect((await orkas.invoke<{ conversations: unknown[] }>('conversations.list')).conversations).toHaveLength(1);
     await page.locator('#chat-send-btn').click();
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', { hasText: 'APP_RETRY_ACK' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])', { hasText: 'APP_RETRY_ACK' })).toBeVisible({ timeout: 20_000 });
     expect((await orkas.invoke<{ conversations: unknown[] }>('conversations.list')).conversations).toHaveLength(1);
     expect(orkas.modelRequests).toHaveLength(1);
     expectAppCreationContext(orkas.modelRequests[0]);

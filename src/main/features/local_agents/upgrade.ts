@@ -7,12 +7,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
+import { stripVTControlCharacters } from 'node:util';
 import { buildCliSpawnEnv, resolveCliCommand } from './spawn-command.js';
 import { killProcessTree } from './backends/base.js';
 import { resolveCli, invalidateCache, type LocalCliType, type LocalCliEntry } from './registry.js';
 import { detectVersionResult, checkMinVersion, cliVersionAtLeast } from './version.js';
 import { whichBin } from './which.js';
 import { createLogger } from '../../logger.js';
+import { sanitizeLogTextForUpload } from '../../util/log-sanitize.js';
+import { redactPaths } from '../../util/redact.js';
 
 const log = createLogger('local-cli-upgrade');
 
@@ -22,7 +26,7 @@ const PACKAGES: Record<LocalCliType, readonly string[]> = {
 };
 export type CliUpgradePlan = { method: 'native' | 'npm' | 'brew' | 'unavailable'; command?: string; args?: string[] };
 export type CliUpgradeInfo = { type: LocalCliType; version: string | null; can_upgrade: boolean; method: CliUpgradePlan['method'] };
-type CliUpgradeOutcome = CliUpgradeInfo & { ok: boolean; error_code?: 'failed' | 'timeout' | 'output_limit' | 'verification_failed' | 'changed_installation' | 'unavailable'; entry?: LocalCliEntry };
+type CliUpgradeOutcome = CliUpgradeInfo & { ok: boolean; outcome?: 'upgraded' | 'up_to_date'; error_code?: 'failed' | 'timeout' | 'output_limit' | 'verification_failed' | 'changed_installation' | 'unavailable'; error_detail?: string; entry?: LocalCliEntry };
 export type CliUpgradeResult = CliUpgradeOutcome & { operation_id: number; duration_ms: number };
 let operationCounter = 0;
 const inFlight = new Map<LocalCliType, Promise<CliUpgradeResult>>();
@@ -30,11 +34,14 @@ type CommandFailureDiagnostic =
   | { phase: 'spawn'; spawn_code: string }
   | { phase: 'exit'; exit_code: number | null; signal: string };
 
-/** No output enters UI/logs. Help capture and total output are independently bounded. */
-export function runUpgradeCommand(command: string, args: string[], timeoutMs: number, capture = false): Promise<{ ok: boolean; text: string; error?: 'failed' | 'timeout' | 'output_limit'; diagnostic?: CommandFailureDiagnostic }> {
+/** Help capture stays private. Explicit maintenance may return a redacted failure
+ * tail to the local UI only; output never enters logs or telemetry. */
+export function runUpgradeCommand(command: string, args: string[], timeoutMs: number, capture: boolean | 'failure' = false): Promise<{ ok: boolean; text: string; error?: 'failed' | 'timeout' | 'output_limit'; error_detail?: string; diagnostic?: CommandFailureDiagnostic }> {
   return new Promise(resolve => {
     const launch = resolveCliCommand(command, args);
     let settled = false; let bytes = 0; let text = '';
+    let tail = ''; let tailTruncated = false;
+    const decoders = { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') };
     let timer: NodeJS.Timeout | undefined;
     const child = spawn(launch.command, launch.args, {
       cwd: os.homedir(), env: buildCliSpawnEnv(command), stdio: ['ignore', 'pipe', 'pipe'],
@@ -44,16 +51,39 @@ export function runUpgradeCommand(command: string, args: string[], timeoutMs: nu
     const finish = (ok: boolean, error?: 'failed' | 'timeout' | 'output_limit', kill = false, diagnostic?: CommandFailureDiagnostic) => {
       if (settled) return;
       settled = true; clearTimeout(timer);
-      const done = () => resolve({ ok, text, ...(error ? { error } : {}), ...(diagnostic ? { diagnostic } : {}) });
+      let detail = '';
+      if (!ok && capture === 'failure') {
+        // Drop a partial leading line before redaction so a cut credential cannot
+        // lose its field/prefix and escape the existing privacy filters.
+        const firstLineEnd = tail.indexOf('\n');
+        const completeTail = tailTruncated ? (firstLineEnd < 0 ? '' : tail.slice(firstLineEnd + 1)) : tail;
+        const clean = stripVTControlCharacters(completeTail).replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+        detail = redactPaths(sanitizeLogTextForUpload(clean)).trim();
+        if (detail && (detail.length > 8192 || tailTruncated)) {
+          let start = Math.max(0, detail.length - 8191);
+          // Keep the tail within its UI budget without splitting a UTF-16 pair.
+          const first = detail.charCodeAt(start);
+          if (start > 0 && first >= 0xdc00 && first <= 0xdfff) start++;
+          detail = '…' + detail.slice(start);
+        }
+        if (!detail && diagnostic) detail = diagnostic.phase === 'spawn'
+          ? diagnostic.spawn_code : `exit_code=${diagnostic.exit_code}, signal=${diagnostic.signal}`;
+      }
+      const done = () => resolve({ ok, text, ...(error ? { error } : {}), ...(detail ? { error_detail: detail } : {}), ...(diagnostic ? { diagnostic } : {}) });
       if (kill) killProcessTree(child, 'SIGKILL', { onComplete: done }); else done();
     };
-    const read = (chunk: Buffer) => {
+    const read = (chunk: Buffer, stream: 'stdout' | 'stderr') => {
       if (settled) return;
       bytes += chunk.length;
       if (bytes > 1024 * 1024) return finish(false, 'output_limit', true);
-      if (capture && text.length < 64 * 1024) text += chunk.toString('utf8').slice(0, 64 * 1024 - text.length);
+      if (capture === true && text.length < 64 * 1024) text += chunk.toString('utf8').slice(0, 64 * 1024 - text.length);
+      if (capture === 'failure') {
+        tail += decoders[stream].write(chunk);
+        if (tail.length > 32 * 1024) { tail = tail.slice(-32 * 1024); tailTruncated = true; }
+      }
     };
-    child.stdout?.on('data', read); child.stderr?.on('data', read);
+    child.stdout?.on('data', chunk => read(chunk, 'stdout'));
+    child.stderr?.on('data', chunk => read(chunk, 'stderr'));
     child.on('error', (error: NodeJS.ErrnoException) => finish(false, 'failed', false, {
       phase: 'spawn', spawn_code: error.code && Object.hasOwn(os.constants.errno, error.code) ? error.code : 'unknown',
     }));
@@ -158,16 +188,17 @@ export function upgradeLocalCli(type: LocalCliType): Promise<CliUpgradeResult> {
     if (fresh.path !== entry.path || fresh.fullVersion !== entry.fullVersion || fresh.version !== entry.version) {
       return { ...metadata, ok: false, error_code: 'changed_installation' };
     }
-    const result = await runUpgradeCommand(plan.command, plan.args, 10 * 60_000);
+    const result = await runUpgradeCommand(plan.command, plan.args, 10 * 60_000, 'failure');
     invalidateCache(type);
     if (!result.ok) {
       // Only explicit maintenance logs one bounded receipt. Capability probes
-      // remain quiet; paths, arguments, output and raw errors never leave here.
+      // remain quiet; paths, arguments, output and raw errors are never logged.
       log.warn('CLI upgrade command failed', {
         cli: type, method: plan.method, reason: result.error || 'failed',
         ...(result.diagnostic || { phase: 'limit' }),
       });
-      return { ...metadata, ok: false, error_code: result.error || 'failed' };
+      return { ...metadata, ok: false, error_code: result.error || 'failed',
+        ...(result.error_detail ? { error_detail: result.error_detail } : {}) };
     }
     // Verify the original entry point, not a newly discovered higher-priority install.
     const probe = await detectVersionResult(entry.path);
@@ -179,7 +210,10 @@ export function upgradeLocalCli(type: LocalCliType): Promise<CliUpgradeResult> {
     if (after.path !== entry.path || after.version !== probe.version || !after.available) {
       return { ...metadata, ok: false, error_code: 'changed_installation' };
     }
-    return { ...info(after, plan), ok: true, entry: after };
+    // A successful updater may be a no-op. Compare verified versions only
+    // after all health/identity checks, preserving prerelease distinctions.
+    const current = info(after, plan);
+    return { ...current, ok: true, outcome: metadata.version === current.version ? 'up_to_date' : 'upgraded', entry: after };
   })().then(result => ({ ...result, operation_id: operationId, duration_ms: Date.now() - startedAt }));
   inFlight.set(type, job);
   void job.finally(() => { if (inFlight.get(type) === job) inFlight.delete(type); }).catch(() => {});

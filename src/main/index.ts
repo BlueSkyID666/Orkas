@@ -209,6 +209,7 @@ import * as reflectionOrchestrator from './features/reflection-orchestrator';
 import * as autoTasks from './features/auto_tasks';
 import * as projectDriverRunner from './features/project_driver_runner';
 import * as projectTasks from './features/project_tasks';
+import * as projects from './features/projects';
 import * as conversationFiling from './features/conversation_filing';
 import * as systemSkills from './features/system_skills';
 import * as bundledContentStartup from './features/bundled_content_startup';
@@ -442,6 +443,14 @@ function registerIpc(prepareShutdown: () => Promise<void>): void {
   });
   conversationFiling.onConversationFilingFailed(({ userId, ...receipt }) => {
     conversationFilingFailure.emit(receipt, userId);
+  });
+  conversationFiling.onConversationProjectRenamed((event) => {
+    if (!users.hasActiveUser() || users.getActiveUserId() !== event.userId) return;
+    ipc.broadcastToRenderer('projects:renamed', event);
+  });
+  projects.onProjectInstructionsChanged((event) => {
+    if (!users.hasActiveUser() || users.getActiveUserId() !== event.uid) return;
+    ipc.broadcastToRenderer('projects:instructions-changed', { projectId: event.projectId });
   });
   conversationTaskBoard.onBacklogExecutionChanged((e) => ipc.broadcastToRenderer('projects:tasks-changed', {
     projectId: e.pid,
@@ -1318,7 +1327,7 @@ function registerChatAppProtocol(): void {
         log.warn('chat-app: unparseable URL', { error_code: 'invalid_url' });
         return new Response('bad request', { status: 400 });
       }
-      const sdkResource = appResource(request);
+      const sdkResource = await appResource(request);
       if (sdkResource) {
         if (sdkResource.status !== 200) return new Response('Application resource unavailable', { status: sdkResource.status });
         if ('body' in sdkResource) return new Response(sdkResource.body, {
@@ -1350,9 +1359,6 @@ function registerChatAppProtocol(): void {
           return new Response('bad request', { status: 400 });
         }
         const uid = users.getActiveUserId();
-        if (await savedApps.resolveSavedAppType(uid, appId) === 'web') {
-          return Response.json((await import('./features/web_apps/commercial-entry')).commercialWebAppFailure(), { status: 403 });
-        }
         if (hasIsolatedBrowserStorage(uid, { appId })) return new Response('Application origin required', { status: 403 });
         if (savedRelPath === chatArtifacts.BRIDGE_RELPATH) {
           return _withArtifactCors(new Response(chatArtifacts.BRIDGE_JS, {
@@ -1383,9 +1389,6 @@ function registerChatAppProtocol(): void {
       }
 
       const uid = users.getActiveUserId();
-      if (await savedApps.resolveArtifactAppType(uid, cid, artifactId) === 'web') {
-        return Response.json((await import('./features/web_apps/commercial-entry')).commercialWebAppFailure(), { status: 403 });
-      }
       if (hasIsolatedBrowserStorage(uid, { cid, artifactId })) return new Response('Application origin required', { status: 403 });
       // Reserved virtual path: the runtime bridge script (not on disk).
       if (relPath === chatArtifacts.BRIDGE_RELPATH) {

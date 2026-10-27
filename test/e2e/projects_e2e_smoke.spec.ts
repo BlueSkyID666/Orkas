@@ -361,7 +361,7 @@ test.describe('projects', () => {
     await page.locator('#project-chat-input').fill('Use the attached project brief.');
     await page.locator('#project-chat-send-btn').click();
     await expect(page.locator('#panel-conversation')).toHaveClass(/\bactive\b/);
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]')).toContainText(
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])')).toContainText(
       'E2E project attachment received.',
       { timeout: 20_000 },
     );
@@ -399,7 +399,7 @@ test.describe('projects', () => {
     await page.locator('#project-chat-input').fill(taskText);
     await page.locator('#project-chat-send-btn').click();
     await expect(page.locator('#panel-conversation')).toHaveClass(/\bactive\b/);
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]')).toContainText(
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])')).toContainText(
       'E2E image deliverable is ready.',
       { timeout: 20_000 },
     );
@@ -473,7 +473,7 @@ test.describe('projects', () => {
     await expect(page.locator('#chat-history .chat-message.user')).toContainText(
       'Give a self-contained status update for this project.',
     );
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]')).toContainText(
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])')).toContainText(
       modelReply,
       { timeout: 20_000 },
     );
@@ -524,7 +524,7 @@ test.describe('projects', () => {
       'Keep the existing project instructions and add that all customer copy must be English.',
     );
     await page.locator('#project-chat-send-btn').click();
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]')).toContainText(
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble .markdown-body')).toContainText(
       toolReply,
       { timeout: 20_000 },
     );
@@ -535,11 +535,14 @@ test.describe('projects', () => {
       await modelOrkas.invoke<{ content: string }>('projects.instructions.get', { projectId })
     ).content).toBe(replacement);
 
+    // A visible final body can precede stream teardown. Wait until this
+    // control is Send; clicking it while streaming invokes Stop instead.
+    await expect(page.locator('#chat-send-btn')).not.toHaveClass(/\bstreaming\b/);
     modelOrkas.clearModelToolScenario();
     modelOrkas.setModelTextReplies([nextTurnReply]);
     await page.locator('#chat-input').fill('Confirm the current project rules.');
     await page.locator('#chat-send-btn').click();
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble .markdown-body', {
       hasText: nextTurnReply,
     })).toBeVisible({ timeout: 20_000 });
     await expect.poll(() => modelOrkas.modelRequests.length).toBe(3);
@@ -547,6 +550,7 @@ test.describe('projects', () => {
     expect(nextTurnRequest).toContain(original);
     expect(nextTurnRequest).toContain('All customer copy must be English.');
 
+    await expect(page.locator('#chat-send-btn')).not.toHaveClass(/\bstreaming\b/);
     const concurrentUiEdit = `${replacement}\nUse the July launch checklist.`;
     const staleModelReplacement = `${replacement}\nPublish on Friday.`;
     const conflictReply = 'E2E stale project-instructions replacement was rejected.';
@@ -565,7 +569,7 @@ test.describe('projects', () => {
         content: concurrentUiEdit,
       });
     } finally { releaseTool(); }
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]', {
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble .markdown-body', {
       hasText: conflictReply,
     })).toBeVisible({ timeout: 20_000 });
     await expect.poll(() => modelOrkas.modelRequests.length).toBe(5);
@@ -598,7 +602,7 @@ test.describe('projects', () => {
     modelOrkas.setModelTextReplies([sourceReply]);
     await page.locator('#project-chat-input').fill('Record the Nimbus payments decision for this project.');
     await page.locator('#project-chat-send-btn').click();
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]')).toContainText(
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])')).toContainText(
       sourceReply,
       { timeout: 20_000 },
     );
@@ -619,7 +623,7 @@ test.describe('projects', () => {
       'Continue the earlier Nimbus payments plan from this project. Do not make me repeat its constraints.',
     );
     await page.locator('#project-chat-send-btn').click();
-    await expect(page.locator('#chat-history .chat-message.assistant [data-role="final"]')).toContainText(
+    await expect(page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])')).toContainText(
       finalReply,
       { timeout: 20_000 },
     );
@@ -636,7 +640,7 @@ test.describe('projects', () => {
       /please.{0,20}(?:repeat|restate)|请.{0,20}(?:重复|重述)/i,
     );
     await expect(
-      page.locator('#chat-history .chat-message.assistant [data-role="final"]'),
+      page.locator('#chat-history .chat-message.assistant .chat-bubble > :is(.markdown-body, [data-role="final"])'),
     ).not.toContainText(/chat_history|<chat-history/i);
 
     const allConversations = await modelOrkas.invoke<{

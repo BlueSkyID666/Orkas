@@ -197,7 +197,15 @@ test.describe('settings modules and model guard', () => {
       await expect(protocolMenu).toHaveCount(0);
       await expect(modal).toHaveClass(/\bopen\b/);
       await protocolTrigger.click();
-      if (protocol === 'anthropic') await orkas.page.keyboard.press('ArrowDown');
+      if (protocol === 'anthropic') {
+        const option = protocolMenu.getByRole('option', { name: 'Anthropic-compatible', exact: true });
+        const optionId = await option.getAttribute('id');
+        for (let index = 0; index < await protocolMenu.getByRole('option').count(); index += 1) {
+          if (await protocolTrigger.getAttribute('aria-activedescendant') === optionId) break;
+          await orkas.page.keyboard.press('ArrowDown');
+        }
+        await expect(protocolTrigger).toHaveAttribute('aria-activedescendant', optionId!);
+      }
       await orkas.page.keyboard.press('Enter');
       await expect(protocolMenu).toHaveCount(0);
       await expect(protocolPicker).toHaveAttribute('data-value', protocol);

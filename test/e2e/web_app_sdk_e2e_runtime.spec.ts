@@ -712,6 +712,7 @@ test('new ordinary apps isolate browser data across objects and accounts while r
     const app: any = await orkas.invoke('savedApps.saveFromPath', { path: entry, title, mode: 'new' });
     expect(app.ok).toBe(true); saved.push(app);
   }
+  expect(new Set(saved.map(app => app.id)).size).toBe(3);
   const oldMeta = path.join(orkas.workspaceRoot, 'account-e2e/cloud/saved_apps', saved[2].id, '__orkas-meta.json');
   const metadata = JSON.parse(readFileSync(oldMeta, 'utf8')); delete metadata.browserStorage;
   writeFileSync(oldMeta, JSON.stringify(metadata));

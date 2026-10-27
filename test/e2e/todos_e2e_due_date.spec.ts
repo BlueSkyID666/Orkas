@@ -15,9 +15,12 @@ const test = base.extend({
       finally {
         if (previous === undefined) delete process.env.ORKAS_E2E_KEEP_LOGS;
         else process.env.ORKAS_E2E_KEEP_LOGS = previous;
-        const log = info.outputPath('electron-main.log');
-        expect(existsSync(log), 'Retain complete Electron logs on passing runs too').toBe(true);
-        const analysis = analyzeWebAppLogs(readFileSync(log, 'utf8'));
+        const retainedLog = info.outputPath('electron-main.log');
+        // Checkpoint failures retain an immutable, uniquely named snapshot.
+        const log = existsSync(retainedLog) ? retainedLog : info.attachments
+          .find(attachment => attachment.name === 'electron-logs' && attachment.path && existsSync(attachment.path))?.path;
+        expect(!!log, 'Retain complete Electron logs on passing runs too').toBe(true);
+        const analysis = analyzeWebAppLogs(readFileSync(log!, 'utf8'));
         writeFileSync(info.outputPath('log-analysis.json'), JSON.stringify(analysis, null, 2));
         expect(analysis.passed, 'Review log-analysis.json for errors or incomplete coverage').toBe(true);
         if (analysis.requiresReview) console.warn('Due date E2E log warnings:', JSON.stringify(analysis.findings));
@@ -126,6 +129,19 @@ for (const scope of ['global', 'project'] as const) {
     // Edge-aligned native scrolling can leave fractional clipping in the dialog.
     // Center the action before requiring complete visibility; keep the strict oracle.
     await page.locator('#project-todo-save').evaluate(element => element.scrollIntoView({ block: 'center', inline: 'nearest' }));
+    await info.attach('save-button-geometry', {
+      contentType: 'application/json',
+      body: JSON.stringify(await page.locator('#project-todo-save').evaluate(element => {
+        const ancestors = [];
+        for (let node: HTMLElement | null = element as HTMLElement; node; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          ancestors.push({ id: node.id, className: node.className, rect: node.getBoundingClientRect().toJSON(),
+            scrollTop: node.scrollTop, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight,
+            overflowY: style.overflowY, paddingBottom: style.paddingBottom, flexShrink: style.flexShrink });
+        }
+        return { viewport: { width: innerWidth, height: innerHeight }, ancestors };
+      })),
+    });
     await expect(page.locator('#project-todo-save')).toBeInViewport({ ratio: 1 });
     await page.screenshot({ path: info.outputPath('due-form-en-1024.png') });
     await input.fill('');

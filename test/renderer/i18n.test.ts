@@ -595,3 +595,27 @@ describe('locale resource contract', () => {
     }
   });
 });
+
+
+describe('shared 1.9.5 and API-key voice translations', () => {
+  const sharedKeys = ['chat.task_status_planning', 'contexts.kb.image_failed', 'contexts.kb.image_failed_hint',
+    'project.todo.delete_confirm', 'project.todo.due_label',
+    'project.todo.due_on', 'project.todo.due_overdue', 'project.todo.due_invalid'];
+  const voiceKeys = ['chat.mic_title', 'chat.mic_stop_title', 'chat.mic_error_permission',
+    'chat.mic_error_no_device', 'chat.mic_error_unavailable', 'chat.mic_insufficient_credits',
+    'chat.mic_limit_reached', 'settings.orkas_api.key_required'];
+  it.each(LANGS)('renders shared status, recovery and voice guidance using the selected %s table', lang => {
+    const tables = localeTables('renderer');
+    const { sandbox } = loadI18n({boot:{lang,tables}});
+    for (const key of [...sharedKeys,...voiceKeys]) {
+      expect(tables[lang][key], lang + ':' + key).toBeTypeOf('string');
+      expect(tables[lang][key].trim(), lang + ':' + key).not.toBe('');
+      const variables = Object.fromEntries(placeholders(tables.en[key]).map(name => [name, name === 'seconds' ? '120' : '2026-10-26']));
+      const expected = tables[lang][key].replace(/\{(\w+)\}/g, (_match: string,name: string) => variables[name]);
+      expect(sandbox.t(key,variables), lang + ':' + key).toBe(expected);
+      expect(sandbox.t(key,variables)).not.toMatch(/\{\w+\}/);
+    }
+    if(lang !== 'en') for(const key of voiceKeys)
+      expect(tables[lang][key], lang + ':' + key + ' translated voice recovery').not.toBe(tables.en[key]);
+  });
+});
