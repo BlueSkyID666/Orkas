@@ -1059,7 +1059,7 @@ export function recordModelRawEventForLog(stats: ModelRunLogDiagnostics, ev: unk
         `tool=${safeToolNameForLog(e.name)} call=${maskId(e.id)} error=${e.isError ? 'true' : 'false'}${e.errorSeverity ? ` severity=${e.errorSeverity}` : ''}`,
       );
       const runtimeException = ['tool_execution_exception', 'tool_execution_stalled', 'tool_result_processing_exception'].includes(String(e.errorCode || ''));
-      recordToolResultRecovery(stats, e, !!e.isError && e.errorSeverity !== 'recoverable' && !runtimeException);
+      recordToolResultRecovery(stats, e, !!e.isError && !e.executionCancelled && e.errorSeverity !== 'recoverable' && !runtimeException);
       const planMutation = safePlanMutationForLog(e);
       const providerRound = stats.providerRounds.at(-1);
       if (planMutation && providerRound) {
