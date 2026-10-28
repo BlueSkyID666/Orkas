@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { expect, test, type OrkasTestApp } from './fixtures/orkas';
@@ -283,6 +283,46 @@ test.describe('projects', () => {
     await expect(page.locator('.ui-dialog-overlay:visible .ui-dialog')).toBeVisible();
     await page.locator('.ui-dialog-overlay:visible [data-act="ok"]').click();
     await expect(memory).toHaveCount(0);
+  });
+
+  test('locks unreadable project instructions and restores the saved rules after recovery', async ({ orkas }) => {
+    const name = 'E2E Instructions Read Recovery';
+    const original = 'Keep the approved venue and do not contact vendors.';
+    await createProject(orkas, name);
+    const page = orkas.page!;
+    const listed = await orkas.invoke<{ projects: Array<{ project_id: string; name: string }> }>('projects.list');
+    const projectId = listed.projects.find(project => project.name === name)!.project_id;
+    await orkas.invoke('projects.instructions.set', { projectId, content: original });
+    await expect(page.locator('#project-instructions-read')).toHaveText(original);
+    const file = readdirSync(orkas.workspaceRoot)
+      .map(uid => path.join(orkas.workspaceRoot, uid, 'cloud', 'projects', projectId, 'ORKAS.md'))
+      .find(candidate => existsSync(candidate))!;
+    expect(file).toBeTruthy();
+    const preserved = file + '.preserved';
+    // A directory at the file path triggers a real read failure without
+    // relying on permission bits that elevated users or Windows may ignore.
+    renameSync(file, preserved);
+    mkdirSync(file);
+    try {
+      await page.evaluate(pid => (window as any).loadProjectDetail(pid), projectId);
+      await expect(page.locator('#project-instructions-input')).toBeDisabled();
+      await expect(page.locator('#project-instructions-edit-btn')).toBeDisabled();
+      await expect(page.locator('#project-instructions-setup-btn')).toBeDisabled();
+      await expect(page.locator('#project-instructions-save-btn')).toBeDisabled();
+      await expect(page.locator('#project-instructions-modal')).not.toHaveClass(/open/);
+      expect(readFileSync(preserved, 'utf8')).toBe(original);
+    } finally {
+      rmdirSync(file);
+      renameSync(preserved, file);
+    }
+    await page.evaluate(pid => (window as any).loadProjectDetail(pid), projectId);
+    await expect(page.locator('#project-instructions-read')).toHaveText(original);
+    await page.locator('#project-instructions-edit-btn').click();
+    await expect(page.locator('#project-instructions-input')).toHaveValue(original);
+    await page.locator('#project-instructions-input').fill('Unsaved recovery draft.');
+    await page.locator('#project-instructions-cancel-btn').click();
+    expect(await orkas.invoke('projects.instructions.get', { projectId })).toMatchObject({ content: original });
+    await expect(page.locator('#project-instructions-read')).toHaveText(original);
   });
 
   test('uploads, previews, persists, and deletes a project Library file', async ({ orkas }) => {
