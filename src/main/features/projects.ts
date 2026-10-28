@@ -483,13 +483,17 @@ export function formatProjectContextPolicyForSystemPrompt(): string {
 export async function readProjectInstructions(
   uid: string,
   projectId: string,
-): Promise<{ ok: true; content: string; limit: number } | { ok: false; error: ProjectError }> {
+): Promise<{ ok: true; content: string; limit: number } | { ok: false; error: ProjectError | 'read_failed' }> {
   const cur = await _readProject(uid, projectId);
   if (!cur) return { ok: false, error: 'not_found' };
   let content = '';
   try {
     content = await fsp.readFile(projectInstructionsFile(uid, projectId), 'utf8');
-  } catch { /* missing file = no instructions yet */ }
+  } catch (error) {
+    // Only an absent file means no instructions. Existing consumers keep an
+    // unavailable source locked instead of enabling edits on a false empty.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, error: 'read_failed' };
+  }
   return { ok: true, content, limit: PROJECT_INSTRUCTIONS_CHAR_LIMIT };
 }
 

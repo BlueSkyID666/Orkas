@@ -724,6 +724,28 @@ describe('projects › instructions', () => {
     expect(read.limit).toBe(projects.PROJECT_INSTRUCTIONS_CHAR_LIMIT);
   });
 
+  it.each(['EACCES', 'EIO'])('keeps unreadable instructions unavailable and recovers without losing saved rules (%s)', async code => {
+    const projects = await loadProjects();
+    const paths = await import('../../../src/main/paths');
+    const created = await projects.createProject(TEST_UID, 'Instructions read recovery');
+    if (!created.ok) throw new Error('Project fixture failed');
+    const pid = created.project.project_id;
+    const original = 'Keep the approved venue and do not contact vendors.';
+    await projects.writeProjectInstructions(TEST_UID, pid, original);
+    const file = paths.projectInstructionsFile(TEST_UID, pid);
+    const read = fs.promises.readFile.bind(fs.promises);
+    const spy = vi.spyOn(fs.promises, 'readFile').mockImplementation((...args: any[]) => {
+      if (args[0] === file) return Promise.reject(Object.assign(new Error('Private instructions read failure'), { code }));
+      return (read as any)(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      expect(await projects.readProjectInstructions(TEST_UID, pid)).toEqual({ ok: false, error: 'read_failed' });
+      expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    } finally { spy.mockRestore(); syncBuiltinESMExports(); }
+    expect(await projects.readProjectInstructions(TEST_UID, pid)).toMatchObject({ ok: true, content: original });
+  });
+
   it('write → persists ORKAS.md in the project dir; read round-trips; empty write clears', async () => {
     const projects = await loadProjects();
     const r = await projects.createProject(TEST_UID, 'P');
