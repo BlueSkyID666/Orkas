@@ -206,6 +206,75 @@ describe('OfficeCLI engine', () => {
     expect(mocks.killProcessTree).toHaveBeenCalledWith(child, 'SIGKILL');
   });
 
+  it.each(['write', 'end', 'write-event', 'async-event'] as const)('terminates an unfinished command once when stdin fails through %s', async (failurePoint) => {
+    vi.useFakeTimers();
+    const child = new FakeChild();
+    mocks.spawn.mockReturnValue(child);
+    const controller = new AbortController();
+    const failure = new Error('input pipe failed');
+    if (failurePoint === 'write' || failurePoint === 'end') {
+      child.stdin[failurePoint].mockImplementation(() => { throw failure; });
+    } else if (failurePoint === 'write-event') {
+      child.stdin.write.mockImplementation(() => child.stdin.emit('error', failure));
+    }
+    const result = runOfficeCli(['batch', 'book.xlsx'], {
+      cwd: tmpDir, stdin: '{"ops":[]}', signal: controller.signal, timeoutMs: 25,
+    });
+    const rejected = expect(result).rejects.toMatchObject({
+      code: 'E_OFFICE_STDIN', message: 'OfficeCLI stdin failed: input pipe failed',
+    });
+    if (failurePoint === 'async-event') child.stdin.emit('error', failure);
+    await rejected;
+    expect(mocks.killProcessTree).toHaveBeenCalledExactlyOnceWith(child, 'SIGKILL');
+    if (failurePoint === 'write' || failurePoint === 'write-event') {
+      expect(child.stdin.end).not.toHaveBeenCalled();
+    }
+    // Late transport events must neither replay the command nor kill a recycled PID.
+    child.stdin.emit('error', failure);
+    child.emit('close', 0);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(30);
+    expect(mocks.killProcessTree).toHaveBeenCalledTimes(1);
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    await expect(result).rejects.toMatchObject({ code: 'E_OFFICE_STDIN' });
+  });
+
+  it('does not terminate a completed command when a late stdin error arrives', async () => {
+    const child = new FakeChild();
+    mocks.spawn.mockReturnValue(child);
+    const result = runOfficeCli(['view', 'book.xlsx'], { cwd: tmpDir });
+    child.emit('close', 0);
+    child.stdin.emit('error', new Error('late pipe failure'));
+    await expect(result).resolves.toEqual({ code: 0, stdout: '', stderr: '' });
+    expect(mocks.killProcessTree).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1, null])('keeps resident close best-effort and reports only unsuccessful exit status %s', async (exitCode) => {
+    const file = path.join(tmpDir, 'confidential-acquisition.docx');
+    const privateOutput = 'private document contents';
+    const child = new FakeChild();
+    mocks.spawn.mockReturnValue(child);
+    const result = closeOfficeFile(file, tmpDir);
+    child.stdout.emit('data', privateOutput);
+    child.stderr.emit('data', privateOutput);
+    child.emit('close', exitCode);
+    await expect(result).resolves.toBeUndefined();
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+    if (exitCode === 0) {
+      expect(mocks.warn).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.warn).toHaveBeenCalledExactlyOnceWith('OfficeCLI resident close failed', {
+        file: expect.any(Object), exit_code: exitCode ?? -1,
+        stdout_chars: privateOutput.length, stderr_chars: privateOutput.length,
+      });
+      const diagnostic = JSON.stringify(mocks.warn.mock.calls);
+      expect(diagnostic).not.toContain(privateOutput);
+      expect(diagnostic).not.toContain(tmpDir);
+      expect(diagnostic).not.toContain(path.basename(file));
+    }
+  });
+
   it.each(['close', 'sweep'] as const)('keeps %s failure diagnostics without leaking private file or error contents', async (operation) => {
     const file = path.join(tmpDir, 'confidential-acquisition.docx');
     const privateMessage = 'private document text and credentials from a failed native process';

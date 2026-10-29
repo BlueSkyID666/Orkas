@@ -100,7 +100,7 @@ export function officeCliAvailable(): boolean {
 
 /** Spawn the OfficeCLI binary with `args`. Resolves on process exit with the
  *  captured stdout/stderr (any exit code — callers inspect `code`); rejects
- *  only on spawn failure or timeout. */
+ *  on spawn/input failure, cancellation, timeout or output overflow. */
 export function runOfficeCli(args: string[], opts: RunOfficeCliOpts): Promise<OfficeCliResult> {
   const bin = officeCliBinaryPath();
   if (!bin) {
@@ -155,6 +155,13 @@ export function runOfficeCli(args: string[], opts: RunOfficeCliOpts): Promise<Of
     const terminate = () => {
       try { killProcessTree(child, 'SIGKILL'); } catch { /* best effort */ }
     };
+    const failStdin = (err: Error) => {
+      if (settled) return;
+      // Reject before termination so late pipe/close events cannot change the
+      // outcome. Clearing the deadline alone would leave the command running.
+      fail('E_OFFICE_STDIN', `OfficeCLI stdin failed: ${err.message}`);
+      terminate();
+    };
     const onAbort = () => {
       terminate();
       fail('E_OFFICE_ABORTED', `OfficeCLI aborted: ${args[0]}`);
@@ -179,7 +186,7 @@ export function runOfficeCli(args: string[], opts: RunOfficeCliOpts): Promise<Of
 
     child.stdout?.on('data', (c: Buffer | string) => capture(outChunks, c));
     child.stderr?.on('data', (c: Buffer | string) => capture(errChunks, c));
-    child.stdin?.on('error', (err: Error) => fail('E_OFFICE_STDIN', `OfficeCLI stdin failed: ${err.message}`));
+    child.stdin?.on('error', failStdin);
 
     if (opts.signal) {
       opts.signal.addEventListener('abort', onAbort, { once: true });
@@ -191,9 +198,9 @@ export function runOfficeCli(args: string[], opts: RunOfficeCliOpts): Promise<Of
     if (!settled) {
       try {
         if (opts.stdin !== undefined) child.stdin?.write(opts.stdin);
-        child.stdin?.end();
+        if (!settled) child.stdin?.end();
       } catch (err) {
-        fail('E_OFFICE_STDIN', `OfficeCLI stdin failed: ${(err as Error).message}`);
+        failStdin(err as Error);
       }
     }
 
@@ -218,7 +225,13 @@ export function runOfficeCli(args: string[], opts: RunOfficeCliOpts): Promise<Of
  *  throws — call in a `finally` after a tool finishes with a document. */
 export async function closeOfficeFile(file: string, cwd: string): Promise<void> {
   try {
-    await runOfficeCli(['close', file], { cwd, timeoutMs: 10_000 });
+    const result = await runOfficeCli(['close', file], { cwd, timeoutMs: 10_000 });
+    if (result.code !== 0) {
+      log.warn('OfficeCLI resident close failed', {
+        file: logPathRef(file), exit_code: result.code,
+        stdout_chars: result.stdout.length, stderr_chars: result.stderr.length,
+      });
+    }
   } catch (err) {
     log.warn('OfficeCLI resident close failed', { file: logPathRef(file), error: logErrorSummary(err) });
   }
