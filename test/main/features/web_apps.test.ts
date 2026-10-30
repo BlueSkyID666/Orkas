@@ -35,6 +35,64 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 describe('Web app capability journeys', () => {
+  it('waits for the same local database to close while keeping other apps usable', async () => {
+    const { LocalAppData } = await import('../../../src/main/features/web_apps/data');
+    const definition = { version: 1, tables: [{ id: 'notes', name: 'notes', fields: [{ id: 'body', name: 'body', type: 'string' }], access: { read: ['body'], insert: ['body'], count: true } }] };
+    const dataBundle = (name: string) => ({ ...bundle(name, ['data']), manifest: { sdkVersion: 1, capabilities: ['data'], data: definition } });
+    const b = dataBundle('closing-local-data');
+    const first = runtime.open(uid, 1, b);
+    await call(first.token, 'data.insert', { table: 'notes', values: { body: 'KEEP' } });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const original = LocalAppData.prototype.close;
+    const close = vi.spyOn(LocalAppData.prototype, 'close').mockImplementationOnce(async function () {
+      await gate; await original.call(this);
+    });
+    try {
+      runtime.closeOwner(1);
+      const second = runtime.open(uid, 2, b);
+      let settled = false;
+      const reopened = runtime.call(uid, 2, second.token, 'reopened-query', 'data.query', { table: 'notes' })
+        .finally(() => { settled = true; });
+      const other = runtime.open(uid, 1, dataBundle('independent-local-data'));
+      expect(await call(other.token, 'data.insert', { table: 'notes', values: { body: 'OTHER' } })).toBeDefined();
+      expect(settled).toBe(false);
+      release();
+      expect(await reopened).toEqual({ records: [{ body: 'KEEP' }] });
+      await runtime.call(uid, 2, second.token, 'reopened-insert', 'data.insert', { table: 'notes', values: { body: 'NEW' } });
+      runtime.closeOwner(2); await runtime.drainData();
+      const third = runtime.open(uid, 2, b);
+      const result: any = await runtime.call(uid, 2, third.token, 'final-read', 'data.query', { table: 'notes' });
+      expect(result.records.map((row: any) => row.body).sort()).toEqual(['KEEP', 'NEW']);
+    } finally { release(); close.mockRestore(); }
+    expect(host.generate).not.toHaveBeenCalled(); expect(host.tools).not.toHaveBeenCalled();
+  });
+
+  it.each(['cancel', 'request-cancel', 'account-switch'] as const)('does not reopen private data when a waiting app loses access through %s', async action => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const dataCall = vi.fn(async () => ({ records: [] }));
+    const opening = vi.fn(async () => ({ call: dataCall } as any));
+    const create = vi.fn(() => ({ open: opening, call: dataCall, close: () => gate }));
+    host.dataOwner = create;
+    const b = { ...bundle('cancel-reopen', ['data']), manifest: { sdkVersion: 1, capabilities: ['data'], data: { version: 1, tables: [{ id: 'notes', name: 'notes', fields: [{ id: 'body', name: 'body', type: 'string' }], access: { read: ['body'] } }] } } };
+    const first = runtime.open(uid, 1, b);
+    await call(first.token, 'data.query', { table: 'notes' });
+    runtime.closeOwner(1);
+    const second = runtime.open(uid, 2, b);
+    const pending = runtime.call(uid, 2, second.token, 'waiting-read', 'data.query', { table: 'notes' })
+      .then(value => ({ value }), error => ({ error }));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    if (action === 'cancel') runtime.closeOwner(2);
+    else if (action === 'request-cancel') runtime.cancel(uid, 2, second.token, 'waiting-read');
+    else uid = 'account-b';
+    release();
+    expect(await pending).toMatchObject({ error: { code: action === 'account-switch' ? 'E_CLOSED' : 'E_CANCELLED' } });
+    expect(create).toHaveBeenCalledOnce();
+    expect(dataCall).toHaveBeenCalledOnce();
+  });
+
+
   it('keeps another application instance usable when the first requester closes during shared SQLite startup', async () => {
     let enter!: () => void, release!: () => void;
     const entered = new Promise<void>(resolve => { enter = resolve; });
