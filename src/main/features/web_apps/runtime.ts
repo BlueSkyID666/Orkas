@@ -173,16 +173,28 @@ export class WebAppRuntime {
   private dataConnections=new Map<string,LocalAppData>();
   private dataOwners=new Map<string,AppDataOwner>();
   private dataOpening=new Map<string,Promise<LocalAppData>>();
-  private dataClosures=new Set<Promise<void>>();
-  async drainData(){await Promise.allSettled([...this.dataOpening.values()]);await Promise.allSettled([...this.dataClosures]);}
+  private dataClosures=new Map<string,Promise<void>>();
+  async drainData(){await Promise.allSettled([...this.dataOpening.values()]);await Promise.allSettled([...this.dataClosures.values()]);}
   private dataFile(s:Instance){return this.preview ? path.join(this.preview.storageRoot,'data.sqlite') : path.join(webAppSandboxRoot(s.uid,s.bundle.key,'local'),'data.sqlite');}
   private async dataCall(s:Instance,method:string,args:unknown,signal:AbortSignal){
     if(heldAppData.has(JSON.stringify([s.uid,s.bundle.key])))return error('E_BUSY');
     if(!s.manifest.data)return error('E_NOT_DECLARED');
-    const file=this.dataFile(s);let connection=this.dataConnections.get(file);
+    const file=this.dataFile(s);
+    let connection=this.dataConnections.get(file);
     if(this.dataOwners.get(file)?.closed){this.releaseData(file);connection=undefined;}
     // A worker stopped by a call timeout or crash never recovers; release it so this call reopens.
     if(connection?.dead){createLogger('web-app-data').warn('data worker stopped, reopening');this.releaseData(file);connection=undefined;}
+    // Both a user close and a stopped worker release ownership asynchronously.
+    // A new session must wait for that same file's final checkpoint first.
+    if(!connection){
+      const closing=this.dataClosures.get(file);
+      if(closing){
+        await closing;
+        if(signal.aborted||s.controller.signal.aborted||s.uid!==this.host.activeUser())return error('E_CLOSED');
+        if(heldAppData.has(JSON.stringify([s.uid,s.bundle.key])))return error('E_BUSY');
+        connection=this.dataConnections.get(file);
+      }
+    }
     if(!connection){
       if(!this.dataOpening.has(file)&&this.dataConnections.size+this.dataOpening.size>=4)return error('E_BUSY');
       const boundary=this.preview?.storageRoot ?? userLocalRoot(s.uid);
@@ -205,7 +217,7 @@ export class WebAppRuntime {
   private releaseData(file:string){
     const connection=this.dataConnections.get(file);this.dataConnections.delete(file);
     const owner=this.dataOwners.get(file);this.dataOwners.delete(file);
-    if(connection){const closing=(owner?owner.close():connection.close()).catch(e=>{createLogger('web-app-data').warn('data checkpoint unavailable',{error_code:(e as any).code||'E_DATA'});}).finally(()=>this.dataClosures.delete(closing));this.dataClosures.add(closing);}
+    if(connection){const closing=(owner?owner.close():connection.close()).catch(e=>{createLogger('web-app-data').warn('data checkpoint unavailable',{error_code:(e as any).code||'E_DATA'});}).finally(()=>{if(this.dataClosures.get(file)===closing)this.dataClosures.delete(file);});this.dataClosures.set(file,closing);}
   }
 
   private instances = new Map<string, Instance>();
