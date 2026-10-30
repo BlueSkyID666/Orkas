@@ -49,7 +49,7 @@ https://github.com/user-attachments/assets/4f8b16c8-a192-45a4-b19f-80e8d02c3dab
 | Content & media | **ContentWriter** | Publish-ready posts, articles, newsletters and case studies from a goal, sources or a rough draft |
 | | **PptMaker** | Editable, reviewable PPTX decks from a topic, outline or document |
 | | **ImageStudio** | Posters, covers, social images and infographics |
-| | **VideoStudio** | Narration, AI presenters, captions and dubbing, highlight clips, localization |
+| | **VideoStudio** | Narration, AI presenters, captions and dubbing, highlight clips, localization, and reference-video recreation with your own content and footage |
 | | **VoiceStudio** | Narration, multi-voice audio, transcripts and subtitles, audio editing and mixing |
 | | **UIDesigner** | Editable, HTML-first UI from product goals, PRDs, screenshots or Figma material |
 | Build & office | **ProductDeveloper** | Repo-aware engineering — implement a PRD, fix bugs, refactor, review, with verifiable results |
@@ -63,6 +63,16 @@ https://github.com/user-attachments/assets/4f8b16c8-a192-45a4-b19f-80e8d02c3dab
 More on each agent → [orkas.ai/agents](https://orkas.ai/agents/?source=gh-orkas)
 
 </details>
+
+### Recreate a reference video with your own content
+
+**VideoStudio** can recreate a viral video's narrative structure, visual style and editing pace using your own product, script and footage. Supply a reference video file and your assets: the agent analyzes the hook, information order, visual beats and call to action, then proposes what to preserve and what to replace before production.
+
+This works best for motion-graphic explainers, SaaS or app demos, and product ads built from your existing footage. Locally authored text, captions, narration and clips can be revised separately; text baked into AI-generated footage requires changing that footage.
+
+> "Use reference.mp4 as a reference for a 30-second vertical promo. Keep its hook, typography and pacing, replace the content with my product and screen recordings, and show me the breakdown and plan first."
+
+Start with a video file the agent can read; social-platform share-link downloading is not built in. Exact camera moves, human performances and frame-by-frame matching are not guaranteed. See the [reference-recreation workflow](./resources/builtin/marketplace/agents/79df9cc89f5f/skills/video-craft/references/reference-recreation.md).
 
 ---
 

@@ -2,8 +2,147 @@ import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { ownFixtureServer } from './fixtures/server-cleanup';
-import { expect, test } from './fixtures/orkas';
+
 import { expectComposerText } from './fixtures/composer';
+import { expect, openSidebarEntry, test as base, OrkasTestApp } from './fixtures/orkas';
+
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { analyzeWebAppLogs } from './fixtures/web-app-log-analysis';
+
+const test = base.extend({
+  voiceOrkas: async ({}, use, info) => {
+    const previous = process.env.ORKAS_E2E_KEEP_LOGS;
+    process.env.ORKAS_E2E_KEEP_LOGS = '1';
+    const app = new OrkasTestApp(info, { voiceStub: true });
+    try {
+      await app.launch();
+      await use(app);
+    } finally {
+      try { await app.dispose(); }
+      finally {
+        if (previous === undefined) delete process.env.ORKAS_E2E_KEEP_LOGS;
+        else process.env.ORKAS_E2E_KEEP_LOGS = previous;
+        const log = info.outputPath('electron-main.log');
+        expect(existsSync(log), 'Retain complete Electron logs on passing runs too').toBe(true);
+        const analysis = analyzeWebAppLogs(readFileSync(log, 'utf8'));
+        writeFileSync(info.outputPath('log-analysis.json'), JSON.stringify(analysis, null, 2));
+        expect(analysis.passed, 'Review log-analysis.json for errors or incomplete coverage').toBe(true);
+        if (analysis.requiresReview) console.warn('Voice E2E log warnings:', JSON.stringify(analysis.findings));
+      }
+    }
+  },
+});
+
+async function expectPublicTicketTransport(app: OrkasTestApp): Promise<void> {
+  expect(app.voiceSessionRequests).toEqual([{ method: 'POST', path: '/v1/audio/transcription_sessions',
+    authorized: true, body: '{}' }]);
+  expect(await app.electronApp!.evaluate(() => (globalThis as any).__e2eVoiceSessionUrls))
+    .toEqual(['https://orkas.ai/v1/audio/transcription_sessions']);
+  const urls = await app.page!.evaluate(() => (window as any).__e2eVoiceSocketUrls);
+  expect(urls).toHaveLength(1);
+  const socket = new URL(urls[0]);
+  expect(socket.origin + socket.pathname).toBe('wss://orkas.ai/api/voice/asr_ws');
+  expect(socket.searchParams.get('ticket')).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  expect(Array.from(socket.searchParams.keys()).sort()).toEqual(['encoding', 'ticket']);
+  expect(await app.page!.locator('#account-login-overlay').count()).toBe(0);
+}
+
+test.describe('voice input', () => {
+  test('releases the microphone when leaving its composer and preserves the unsent draft', async ({ voiceOrkas }, info) => {
+    const page = voiceOrkas.page!;
+    await voiceOrkas.installVoiceCaptureStub();
+    const input = page.locator('#new-chat-input');
+    const mic = page.locator('#new-chat-mic-btn');
+    await input.fill('Keep this draft after navigation');
+    await mic.click();
+    await expect(mic).toHaveAttribute('data-voice-phase', 'recording', { timeout: 20_000 });
+    await openSidebarEntry(page, '#agents-btn');
+    await expect(input).not.toBeVisible();
+    await expect.poll(() => page.evaluate(() => (window as any).__e2eVoiceTrackStops)).toBe(1);
+    await expect(mic).toHaveAttribute('data-voice-phase', 'idle');
+    await page.screenshot({ path: info.outputPath('voice-left-composer.png') });
+    await openSidebarEntry(page, '#new-chat-btn');
+    await expectComposerText(input, 'Keep this draft after navigation');
+    await expect(page.locator('.ui-dialog-overlay:visible')).toHaveCount(0);
+    await expect(page.locator('#chat-history .chat-message.user')).toHaveCount(0);
+    await expectPublicTicketTransport(voiceOrkas);
+    await page.screenshot({ path: info.outputPath('voice-returned-draft.png') });
+  });
+
+  test('inserts the terminal transcript for review without auto-sending', async ({ voiceOrkas }, info) => {
+    if (!voiceOrkas.page) throw new Error('Orkas renderer is unavailable');
+    const page = voiceOrkas.page;
+    await voiceOrkas.installVoiceCaptureStub();
+
+    const input = page.locator('#new-chat-input');
+    const mic = page.locator('#new-chat-mic-btn');
+    await input.fill('Draft:');
+    await input.evaluate((element: HTMLTextAreaElement) => {
+      const w = window as any;
+      w.composerSetSelection(element, w.composerText(element).length);
+    });
+
+    await mic.click();
+    await expect(mic).toHaveClass(/\bis-recording\b/);
+    await expect(mic).toHaveAttribute('aria-label', 'Stop recording');
+    // A Windows renderer under full-suite load can take slightly over the
+    // global 10s expect window to complete the local WebSocket handshake.
+    await expect(mic).toHaveAttribute('data-voice-phase', 'recording', { timeout: 20_000 });
+    await page.screenshot({ path: info.outputPath('voice-recording-en.png') });
+    await mic.click();
+
+    await expectComposerText(input, 'Draft: E2E dictated launch note');
+    await expect(mic).not.toHaveClass(/\bis-recording\b|\bis-busy\b/);
+    await expect(page.locator('#chat-history .chat-message.user')).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('voice-transcript.png') });
+    expect(await page.evaluate(() => (window as any).__e2eVoiceTrackStops)).toBe(1);
+    await expectPublicTicketTransport(voiceOrkas);
+    writeFileSync(info.outputPath('voice-session-requests.json'), JSON.stringify(voiceOrkas.voiceSessionRequests, null, 2));
+  });
+
+  test('stopping during socket negotiation never starts a stale recording', async ({ voiceOrkas }, info) => {
+    if (!voiceOrkas.page) throw new Error('Orkas renderer is unavailable');
+    const page = voiceOrkas.page;
+    voiceOrkas.setVoiceMode('blocked-open');
+    await voiceOrkas.installVoiceCaptureStub();
+
+    const input = page.locator('#new-chat-input');
+    const mic = page.locator('#new-chat-mic-btn');
+    await input.fill('Keep this draft');
+    await mic.click();
+    await expect(mic).toHaveAttribute('data-voice-phase', 'connecting');
+    await expect(mic).toHaveClass(/\bis-busy\b/);
+    await expect(mic).not.toHaveClass(/\bis-recording\b/);
+    await expect(mic).toHaveAttribute('aria-label', 'Connecting…');
+    await page.screenshot({ path: info.outputPath('voice-connecting-en.png') });
+    await page.setViewportSize({ width: 760, height: 600 });
+    await page.evaluate(async () => { await (window as any).setLang('zh'); });
+    await expect(mic).toHaveAttribute('aria-label', '正在连接…');
+    await page.screenshot({ path: info.outputPath('voice-connecting-zh-narrow.png') });
+    await expect.poll(() => page.evaluate(() => (window as any).__e2eVoiceSocketUrls.length)).toBe(1);
+    await mic.click();
+
+    await expect(mic).not.toHaveClass(/\bis-recording\b|\bis-busy\b/);
+    await expectComposerText(input, 'Keep this draft');
+    await expect(page.locator('.ui-dialog-overlay:visible')).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__e2eVoiceTrackStops)).toBe(1);
+    await expectPublicTicketTransport(voiceOrkas);
+  });
+
+  test('requires a user API key without entering an account login flow', async ({ voiceOrkas }, info) => {
+    const page = voiceOrkas.page!;
+    await voiceOrkas.installVoiceCaptureStub();
+    await voiceOrkas.invoke('orkasApi.remove');
+    await page.locator('#new-chat-input').fill('Preserve my draft');
+    await page.locator('#new-chat-mic-btn').click();
+    await expect(page.locator('.ui-dialog-overlay:visible')).toContainText('Voice input requires an Orkas API key');
+    await expectComposerText(page.locator('#new-chat-input'), 'Preserve my draft');
+    await expect(page.locator('#account-login-overlay')).toHaveCount(0);
+    expect(voiceOrkas.voiceSessionRequests).toHaveLength(0);
+    expect(await page.evaluate(() => (window as any).__e2eVoiceSocketUrls)).toEqual([]);
+    await page.screenshot({ path: info.outputPath('voice-key-required.png') });
+  });
+});
 
 const cleanups: Array<() => Promise<void>> = [];
 test.afterEach(async () => { while (cleanups.length) await cleanups.pop()!(); });
@@ -43,9 +182,11 @@ test.describe('API-key voice input', () => {
       await (window as any).orkas.invoke('orkasApi.save', { apiKey: 'synthetic-voice-e2e-key' });
       const w = window as any;
       w.__voiceStops = 0;
+      w.__voiceCaptures = 0;
       Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { configurable: true, value: async () => ({ getTracks: () => [{ stop() { w.__voiceStops++; } }] }) });
       const node = () => ({ connect() {}, disconnect() {} });
       w.AudioContext = class {
+        constructor() { w.__voiceCaptures++; }
         state = 'running'; sampleRate = 48000; destination = {};
         audioWorklet = { addModule: async () => {} };
         createMediaStreamSource = node;
@@ -69,9 +210,10 @@ test.describe('API-key voice input', () => {
     server.on('upgrade', (request, socket) => {
       const key = String(request.headers['sec-websocket-key']);
       const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
-      socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
+      const upgrade = () => socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
       const ready = Buffer.from('{"event":"ready"}');
-      sendReady = () => socket.write(Buffer.concat([Buffer.from([0x81, ready.length]), ready]));
+      upgrade();
+      sendReady = () => { socket.write(Buffer.concat([Buffer.from([0x81, ready.length]), ready])); };
       let buffer = Buffer.alloc(0);
       socket.on('data', chunk => {
         buffer = Buffer.concat([buffer, chunk]);
@@ -97,6 +239,7 @@ test.describe('API-key voice input', () => {
         constructor(url: string, protocols?: string | string[]) {
           if (!url.startsWith('wss://orkas.ai/api/voice/asr_ws?ticket=')) throw new Error('Unexpected voice destination');
           super('ws://127.0.0.1:' + port + '/api/voice/asr_ws', protocols);
+          this.addEventListener('open', () => { (window as any).__voiceTransportOpen = true; });
         }
       };
     }, (server.address() as AddressInfo).port);
@@ -112,13 +255,19 @@ test.describe('API-key voice input', () => {
       await expect(page.locator('.chat-mic-status:visible')).toHaveCount(0);
     };
     await expect(mic).toHaveAttribute('data-voice-phase', 'connecting');
-    await expectActiveIcon();
+    await expect.poll(() => page.evaluate(() => !!(window as any).__voiceTransportOpen)).toBe(true);
+    await expect(mic).toHaveClass(/is-busy/);
+    await expect(mic).not.toHaveClass(/is-recording/);
+    await expect(mic).toHaveCSS('animation-name', 'none');
+    await expect(mic).toHaveAttribute('aria-label', 'Connecting…');
+    expect(await page.evaluate(() => (window as any).__voiceCaptures)).toBe(0);
     await page.screenshot({ path: testInfo.outputPath('voice-connecting-en.png') });
     await expect.poll(() => !!sendReady).toBe(true);
     await expect(page.locator('.ui-dialog-overlay.open')).toHaveCount(0);
     sendReady!();
     await expect(mic).toHaveAttribute('data-voice-phase', 'recording');
     await expectActiveIcon();
+    expect(await page.evaluate(() => (window as any).__voiceCaptures)).toBe(1);
     await page.screenshot({ path: testInfo.outputPath('voice-recording-en.png') });
     await page.setViewportSize({ width: 760, height: 600 });
     await page.evaluate(async () => { await (window as any).setLang('zh'); });

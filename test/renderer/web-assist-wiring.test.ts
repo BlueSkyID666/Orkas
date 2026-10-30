@@ -939,3 +939,22 @@ describe('Web Assist renderer wiring', () => {
     }
   });
 });
+
+
+describe('Browser assistant status wording', () => {
+  it.each(['en', 'zh', 'fallback'])('distinguishes idle control from reading, acting and waiting (%s)', language => {
+    const messages = language === 'fallback' ? {} : JSON.parse(fs.readFileSync(path.join(rendererRoot, 'locales', language + '.json'), 'utf8'));
+    const context = vm.createContext({ label: (key: string, fallback: string) => messages[key] || fallback });
+    const start = webAssistSource.indexOf('  function assistantStatusText(');
+    vm.runInContext(webAssistSource.slice(start, webAssistSource.indexOf('  function rememberMainActiveTab(', start)), context);
+    const expected = language === 'zh'
+      ? ['AI 可操作此页面', 'AI 正在读取此页面…', 'AI 正在操作此页面…', 'AI 正在等待页面变化…']
+      : ['AI can operate this page', 'AI is reading this page…', 'AI is operating this page…', 'AI is waiting for the page to change…'];
+    for (const [index, assistant_action] of ['', 'observing', 'acting', 'waiting'].entries()) {
+      expect(context.assistantStatusText({ assistant_controlled: true, assistant_action })).toBe(expected[index]);
+      expect(context.assistantStatusText({ assistant_controlled: false, assistant_action })).toBe('');
+      const user = context.assistantStatusText({ user_controlled: true, assistant_controlled: true, assistant_action });
+      expect(user).toBe(language === 'zh' ? '你正在操作此页面，停止操作后 AI 将自动继续' : 'You are using this page; AI will resume after you stop');
+    }
+  });
+});

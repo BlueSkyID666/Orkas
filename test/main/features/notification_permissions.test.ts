@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Notification } from 'electron';
 
 vi.mock('electron', () => ({
   app: { isPackaged: true },
-  Notification: { isSupported: () => true },
+  Notification: { isSupported: vi.fn(() => true) },
   shell: { openExternal: vi.fn() },
 }));
 
@@ -11,6 +12,7 @@ vi.mock('../../../src/main/logger', () => ({
 }));
 
 import {
+  getSystemNotificationPermission,
   markSystemNotificationDelivered,
   markSystemNotificationFailed,
   permissionFromMacNativeState,
@@ -24,6 +26,20 @@ describe('system notification permission helpers', () => {
   afterEach(() => {
     // Reset process-local delivery evidence between cases.
     markSystemNotificationFailed();
+    vi.restoreAllMocks();
+  });
+
+  it.runIf(process.platform === 'darwin')('reads macOS permission without initializing Electron authorization', async () => {
+    // Electron 42's support probe creates the macOS presenter, which requests
+    // authorization. Merely opening Settings must never consume that choice.
+    const supportProbe = vi.spyOn(Notification, 'isSupported').mockImplementation(() => {
+      throw new Error('Unexpected authorization-capable support probe');
+    });
+    const permission = await getSystemNotificationPermission();
+    expect(permission.can_open_settings).toBe(true);
+    expect(['granted', 'denied', 'presentation_disabled', 'not_determined', 'unknown'])
+      .toContain(permission.state);
+    expect(supportProbe).not.toHaveBeenCalled();
   });
 
   it('normalizes the macOS native authorization state', () => {
