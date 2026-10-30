@@ -184,13 +184,16 @@ async function queryWindowsPermission(appId: string): Promise<SystemNotification
 
 export async function getSystemNotificationPermission(): Promise<SystemNotificationPermission> {
   let result: SystemNotificationPermission;
-  if (!Notification.isSupported()) {
-    result = { state: 'unsupported', can_open_settings: false };
-  } else if (process.platform === 'darwin') {
+  if (process.platform === 'darwin') {
+    // Electron 42 initializes its macOS presenter in isSupported(), whose
+    // constructor requests authorization. Status reads must use only the
+    // existing native query so opening Settings cannot trigger that prompt.
     result = {
       state: await queryMacPermission(),
       can_open_settings: true,
     };
+  } else if (!Notification.isSupported()) {
+    result = { state: 'unsupported', can_open_settings: false };
   } else if (process.platform === 'win32') {
     result = {
       state: await queryWindowsPermission(notificationAppId()),
