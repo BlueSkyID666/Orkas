@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "0e78e96e8b9b5abf21a7977610c05c909e5582414d43da4710e36303fa6111b5",
+  "content_tree_sha256": "6e627d500973ee22aa325b3895b7c6e135831632ddc10fb745b5b28e3a445066",
   "files": [
     {
       "path": "marketplace/agents/1040b336306f/agent.json",
@@ -1769,8 +1769,8 @@
     },
     {
       "path": "system/skills/_system.json",
-      "bytes": 273,
-      "sha256": "dfa3d511c76ef69f6c376b3d8e6d74f95ae39d1ed8151e6b9e261cd76a57e359"
+      "bytes": 338,
+      "sha256": "ece38be5e71044e65fd7b658d01351fda5d7e7c3c39062a151cdc09ac2fee09b"
     },
     {
       "path": "system/skills/agent-creator/references/cli-and-prose.md",
@@ -1791,6 +1791,56 @@
       "path": "system/skills/agent-creator/SKILL.md",
       "bytes": 6726,
       "sha256": "2aaad51cc8f0c99f6dbeebc68cc0ce29fe8d15051654386641e51aa45de1ef57"
+    },
+    {
+      "path": "system/skills/orkas-guide/references/agents-skills-and-connectors.md",
+      "bytes": 12690,
+      "sha256": "6ecd84acbfcdd7209607299f35e544d6ce2674ccae2b71a964c6a29ff4b7027b"
+    },
+    {
+      "path": "system/skills/orkas-guide/references/common-recovery.md",
+      "bytes": 4626,
+      "sha256": "e00e1f448feefb72f4602c833b18c7b8bd3dad60fd9a2c7c61b26cb71051e04c"
+    },
+    {
+      "path": "system/skills/orkas-guide/references/editions.md",
+      "bytes": 1999,
+      "sha256": "912a054fb05a5d734ab7b712908a187dbcccdb3544c39ad2b02edfba9d0ee099"
+    },
+    {
+      "path": "system/skills/orkas-guide/references/file-inputs.md",
+      "bytes": 3856,
+      "sha256": "808010c11a3e03847a4b9b18e780e7507ba4f18cd6091084edb9f2f3f2b847cd"
+    },
+    {
+      "path": "system/skills/orkas-guide/references/getting-started.md",
+      "bytes": 8866,
+      "sha256": "9feac71b9ad63633fec78310b5f186ce864153b4e320ebc0cf292660ca63e600"
+    },
+    {
+      "path": "system/skills/orkas-guide/references/library-search-and-apps.md",
+      "bytes": 8755,
+      "sha256": "93eb25b49c51a6b038ce08f28b06dba8797960c5c5baebd6dc81286af0d41f97"
+    },
+    {
+      "path": "system/skills/orkas-guide/references/projects-and-automation.md",
+      "bytes": 12622,
+      "sha256": "1bf2b91f3caad17bb30cab99b0ca33de2086c13809529cbc3a560dea22ed715b"
+    },
+    {
+      "path": "system/skills/orkas-guide/references/settings-data-and-safety.md",
+      "bytes": 18991,
+      "sha256": "46b2b57379c81ae8e43ea816819c2733ca589679d0a8501f9a7337c2633c79e1"
+    },
+    {
+      "path": "system/skills/orkas-guide/references/tasks-and-conversations.md",
+      "bytes": 8122,
+      "sha256": "31273b07be3c0468fc973e35c354ec29c7f6ba0e3eb2df1255dfb15dd2227acb"
+    },
+    {
+      "path": "system/skills/orkas-guide/SKILL.md",
+      "bytes": 6898,
+      "sha256": "b95feddfbe8d9f3da7f276a8219ada61a89e8e52a96b8ac08875eed7d3670d35"
     },
     {
       "path": "system/skills/package-installer/SKILL.md",
@@ -1878,6 +1928,10 @@
       {
         "id": "agent-creator",
         "update_at": 1790685144182
+      },
+      {
+        "id": "orkas-guide",
+        "update_at": 1793351372920
       },
       {
         "id": "package-installer",
