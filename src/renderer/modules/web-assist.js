@@ -154,10 +154,10 @@
   function assistantStatusText(tab) {
     if (tab?.user_controlled) return label('web_assist.user_controlled', 'You are using this page; AI will resume after you stop');
     if (!tab?.assistant_controlled) return '';
-    if (tab.assistant_action === 'observing') return label('web_assist.assistant_observing', 'An AI agent is reading this page…');
-    if (tab.assistant_action === 'acting') return label('web_assist.assistant_acting', 'An AI agent is operating this page…');
-    if (tab.assistant_action === 'waiting') return label('web_assist.assistant_waiting', 'An AI agent is waiting for this page…');
-    return label('web_assist.assistant_ready', 'An AI agent can assist on this page');
+    if (tab.assistant_action === 'observing') return label('web_assist.assistant_observing', 'AI is reading this page…');
+    if (tab.assistant_action === 'acting') return label('web_assist.assistant_acting', 'AI is operating this page…');
+    if (tab.assistant_action === 'waiting') return label('web_assist.assistant_waiting', 'AI is waiting for the page to change…');
+    return label('web_assist.assistant_ready', 'AI can operate this page');
   }
 
   function rememberMainActiveTab(state) {
