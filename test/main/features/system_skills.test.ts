@@ -140,12 +140,15 @@ describe('system skills reconciliation', () => {
     const results = await systemSkills.reconcileAllForActiveUser();
     expect(results.map((r) => [r.id, r.action]).sort()).toEqual([
       ['agent-creator', 'created'],
+      ['orkas-guide', 'created'],
       ['package-installer', 'created'],
       ['skill-creator', 'created'],
       ['web-app-sdk', 'created'],
 
     ]);
     expect(fs.existsSync(path.join(paths.userSystemSkillDir(UID, 'agent-creator'), 'SKILL.md'))).toBe(true);
+    expect(fs.readFileSync(path.join(paths.userSystemSkillDir(UID, 'orkas-guide'), 'SKILL.md'), 'utf8'))
+      .toBe(packagedSystemSkill('orkas-guide'));
     expect(fs.existsSync(path.join(
       paths.userSystemSkillDir(UID, 'agent-creator'),
       'references',
@@ -177,12 +180,14 @@ describe('system skills reconciliation', () => {
     const results = await systemSkills.reconcileAllForUser(loginUid);
     expect(results.map((r) => [r.id, r.action]).sort()).toEqual([
       ['agent-creator', 'created'],
+      ['orkas-guide', 'created'],
       ['package-installer', 'created'],
       ['skill-creator', 'created'],
       ['web-app-sdk', 'created'],
 
     ]);
     expect(fs.existsSync(path.join(paths.userSystemSkillDir(loginUid, 'agent-creator'), 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(paths.userSystemSkillDir(loginUid, 'orkas-guide'), 'SKILL.md'))).toBe(true);
     expect(fs.existsSync(path.join(paths.userSystemSkillDir(loginUid, 'package-installer'), 'SKILL.md'))).toBe(true);
     expect(fs.existsSync(path.join(paths.userSystemSkillDir(loginUid, 'skill-creator'), 'SKILL.md'))).toBe(true);
     expect(fs.existsSync(paths.userSystemSkillDir(UID, 'agent-creator'))).toBe(false);
@@ -198,6 +203,7 @@ describe('system skills reconciliation', () => {
     fs.writeFileSync(path.join(paths.userSystemSkillDir(UID, 'agent-creator'), '_system.json'), '{}');
     const skipped = await systemSkills.reconcileAllForActiveUser();
     expect(skipped.map((r) => r.action)).toEqual([
+      'skipped',
       'skipped',
       'skipped',
       'skipped',
@@ -345,7 +351,12 @@ describe('system skills reconciliation', () => {
       expect(roster).not.toContain(id);
       expect([...bindings.values()].some((binding) => binding.id === id)).toBe(false);
     }
-    expect(roster).not.toContain('orkas-guide');
+    expect(roster).toContain('@skill/orkas-guide');
+    const guide = [...bindings.values()].find(binding => binding.id === 'orkas-guide');
+    expect(guide).toMatchObject({ id: 'orkas-guide', source: 'system' });
+    expect(fs.readFileSync(guide.entry, 'utf8')).toBe(packagedSystemSkill('orkas-guide'));
+    expect(fs.readFileSync(path.join(guide.root, 'references/editions.md'), 'utf8'))
+      .toBe(packagedSystemSkillReference('orkas-guide', 'editions.md'));
     expect(memory.listEntries(UID, 'user').entries).toEqual(['Prefer concise replies.']);
     expect((await systemSkills.reconcileAllForUser(UID)).every((result) => result.action === 'skipped')).toBe(true);
   });
@@ -444,6 +455,7 @@ describe('system skill contracts', () => {
   it('keeps every platform-managed system Skill bilingual without a generic description', () => {
     const ids = [
       'agent-creator',
+      'orkas-guide',
       'package-installer',
       'skill-creator',
       'web-app-sdk',
@@ -540,15 +552,11 @@ describe('system skill contracts', () => {
     expect(md).not.toContain('Both are required');
   });
 
-  it('does not package the hosted-product Orkas guide', () => {
-    expect(fs.existsSync(path.resolve(
-      process.cwd(),
-      'resources',
-      'builtin',
-      'system',
-      'skills',
-      'orkas-guide',
-    ))).toBe(false);
+  it('packages product guidance with edition boundaries and no operation authority', () => {
+    const guide = packagedSystemSkill('orkas-guide');
+    expect(frontmatterOf(guide)).toContain('supplies facts, not task ownership or operation authority');
+    expect(guide).toContain('[editions.md](references/editions.md)');
+    expect(packagedSystemSkillReference('orkas-guide', 'editions.md')).toContain('Commercial edition only');
   });
 
   it('keeps intentional creator-skill category and provenance rules in parity', () => {
